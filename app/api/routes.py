@@ -40,8 +40,16 @@ internal_router = APIRouter()
 
 @router.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    return {"status": "ok"}
+    """Health check endpoint. Does not call external services."""
+    from app.core.config import get_settings
+    from app.main import APP_VERSION
+
+    settings = get_settings()
+    return {
+        "status": "healthy",
+        "version": APP_VERSION,
+        "environment": settings.app_env,
+    }
 
 
 # --- Podcast Jobs ---

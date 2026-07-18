@@ -14,6 +14,8 @@ from app.core.logging import get_logger, setup_logging
 setup_logging()
 logger = get_logger(__name__)
 
+APP_VERSION = "1.0.0"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -42,14 +44,14 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="WanderAI Backend",
         description="Travel podcast generation API",
-        version="0.1.0",
+        version=APP_VERSION,
+        docs_url="/docs",
+        redoc_url="/redoc",
+        openapi_url="/openapi.json",
         lifespan=lifespan,
     )
 
     # CORS middleware
-    # In development: allow all origins for local testing
-    # In production: the native iOS app doesn't use browser CORS,
-    # but we restrict origins to the public API URL for security
     if settings.cors_origins == "*":
         origins = ["*"]
     else:
@@ -62,6 +64,18 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Root endpoint
+    @app.get("/", include_in_schema=False)
+    async def root():
+        return {
+            "name": "WanderAI Backend",
+            "status": "healthy",
+            "version": APP_VERSION,
+            "docs": "/docs",
+            "openapi": "/openapi.json",
+            "health": "/health",
+        }
 
     # Include routers
     app.include_router(router)

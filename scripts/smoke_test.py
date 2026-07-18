@@ -7,14 +7,15 @@ Example:
     python scripts/smoke_test.py https://wanderai-backend.onrender.com
 
 Smoke test steps:
-    1. GET /health — confirm HTTP 200
-    2. POST /v1/podcast-jobs — submit a 2-minute test job
-    3. Confirm job is queued (status = "queued")
-    4. Poll until completed or failed (timeout: 5 minutes)
-    5. GET /v1/episodes/{job_id}/audio — confirm downloadable MP3
-    6. GET /v1/episodes/{job_id}/metadata — confirm JSON metadata
-    7. Validate MP3 is non-empty
-    8. Print results
+    1. GET /health — confirm HTTP 200 and status "healthy"
+    2. GET /docs — confirm documentation is accessible
+    3. POST /v1/podcast-jobs — submit a 2-minute test job
+    4. Confirm job is queued (status = "queued")
+    5. Poll until completed or failed (timeout: 5 minutes)
+    6. GET /v1/episodes/{job_id}/audio — confirm downloadable MP3
+    7. GET /v1/episodes/{job_id}/metadata — confirm JSON metadata
+    8. Validate MP3 is non-empty
+    9. Print results
 
 Notes:
     - In production, the job is enqueued via QStash which calls the internal endpoint
@@ -43,11 +44,24 @@ def main():
     print("1. Health check...")
     r = client.get(f"{base_url}/health")
     assert r.status_code == 200, f"Health check failed: {r.status_code}"
-    assert r.json()["status"] == "ok"
+    health = r.json()
+    assert health["status"] == "healthy", f"Unexpected health status: {health}"
+    print(f"   Status: {health['status']}")
+    print(f"   Version: {health.get('version', 'N/A')}")
+    print(f"   Environment: {health.get('environment', 'N/A')}")
     print("   OK\n")
 
-    # Step 2: Submit a 2-minute test job
-    print("2. Submitting 2-minute test podcast job...")
+    # Step 2: Docs accessible
+    print("2. Documentation check...")
+    r = client.get(f"{base_url}/docs")
+    assert r.status_code == 200, f"/docs returned {r.status_code}"
+    print("   /docs OK")
+    r = client.get(f"{base_url}/openapi.json")
+    assert r.status_code == 200, f"/openapi.json returned {r.status_code}"
+    print("   /openapi.json OK\n")
+
+    # Step 3: Submit a 2-minute test job
+    print("3. Submitting 2-minute test podcast job...")
     payload = {
         "trip_id": "11111111-1111-1111-1111-111111111111",
         "stop_id": "22222222-2222-2222-2222-222222222222",
@@ -64,8 +78,8 @@ def main():
     print(f"   Job created: {job_id}")
     print(f"   Status: {job_data['status']}\n")
 
-    # Step 3: Poll until completed
-    print("3. Polling job status (timeout: 5 minutes)...")
+    # Step 4: Poll until completed
+    print("4. Polling job status (timeout: 5 minutes)...")
     start = time.time()
     timeout = 300  # 5 minutes
     final_status = None
@@ -73,16 +87,16 @@ def main():
     while time.time() - start < timeout:
         r = client.get(f"{base_url}/v1/podcast-jobs/{job_id}")
         assert r.status_code == 200
-        status = r.json()["status"]
+        status_val = r.json()["status"]
 
-        if status != final_status:
+        if status_val != final_status:
             elapsed = int(time.time() - start)
-            print(f"   [{elapsed}s] Status: {status}")
-            final_status = status
+            print(f"   [{elapsed}s] Status: {status_val}")
+            final_status = status_val
 
-        if status == "completed":
+        if status_val == "completed":
             break
-        elif status == "failed":
+        elif status_val == "failed":
             print(f"\n   FAILED: {r.json().get('error_message', 'unknown error')}")
             sys.exit(1)
 
@@ -95,20 +109,22 @@ def main():
     elapsed = int(time.time() - start)
     print(f"   Completed in {elapsed}s\n")
 
-    # Step 4: Download audio
-    print("4. Downloading audio...")
+    # Step 5: Download audio
+    print("5. Downloading audio...")
     r = client.get(f"{base_url}/v1/episodes/{job_id}/audio")
     if r.status_code == 200:
         audio_size = len(r.content)
         print(f"   Audio: {audio_size:,} bytes")
         assert audio_size > 10000, f"Audio too small: {audio_size} bytes"
-        print("   OK\n")
+        # Basic MP3 validation: check for ID3 or MPEG sync bytes
+        assert r.content[:3] in (b"ID3", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"), "Not a valid MP3"
+        print("   MP3 validated OK\n")
     else:
         print(f"   Audio download failed: {r.status_code}")
         print("   (Expected on Render if filesystem was recycled)\n")
 
-    # Step 5: Download metadata
-    print("5. Downloading metadata...")
+    # Step 6: Download metadata
+    print("6. Downloading metadata...")
     r = client.get(f"{base_url}/v1/episodes/{job_id}/metadata")
     if r.status_code == 200:
         metadata = r.json()
