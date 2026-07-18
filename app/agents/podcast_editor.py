@@ -19,8 +19,8 @@ from app.services.openai_service import get_openai_client
 logger = get_logger(__name__)
 
 # Duration constants
-WORDS_PER_MINUTE = 175
-MIN_WORD_RATIO = 0.95
+WORDS_PER_MINUTE = 200  # Aim high so expansion is rarely needed
+MIN_WORD_RATIO = 0.90
 MIN_CHAPTERS_8_MIN = 5
 MIN_SEGMENTS_8_MIN = 16
 MAX_EXPANSION_RETRIES = 2
@@ -154,17 +154,23 @@ async def _generate_script_structured(
 - Target duration: {episode_minutes} minutes
 - Personas: {', '.join(personas)}{season_line}
 
-DURATION REQUIREMENTS (critical):
+DURATION REQUIREMENTS (critical — DO NOT produce a short script):
+- MINIMUM word count: {targets['minimum_word_count']} words (hard floor, script will be rejected below this)
 - Target word count: {targets['target_word_count']} words
-- Minimum word count: {targets['minimum_word_count']} words
 - Preferred range: {targets['target_word_count']}–{targets['preferred_upper_word_count']} words
 - Minimum chapters: {targets['min_chapters']}
 - Minimum dialogue segments: {targets['min_segments']}
-- Most dialogue turns should be 60–120 words
-- Intro must be at least 100 words
-- Outro must be at least 100 words
+- Each dialogue turn should be 60–150 words (longer is better than shorter)
+- Intro must be at least 120 words
+- Outro must be at least 120 words
+- USE ALL the approved findings — weave every single one into the conversation
+- If you have unused findings, add more segments to cover them
 
-Approved findings to use:
+THIS IS VERY IMPORTANT: The script MUST hit at least {targets['minimum_word_count']} words. \
+Write rich, detailed, expressive dialogue. Don't be brief. Elaborate on each point. \
+Add reactions, follow-up questions, anecdotes, and vivid descriptions.
+
+Approved findings to use (USE ALL OF THEM):
 {findings_text}"""
 
     if error_context:
