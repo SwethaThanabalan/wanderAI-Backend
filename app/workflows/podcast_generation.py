@@ -121,12 +121,29 @@ async def process_podcast_job(job_id: UUID) -> None:
         if not script.segments:
             raise RuntimeError("Podcast editor produced no dialogue segments")
 
-        # 5. Audio generation phase
+        # 5. Audio generation phase (with duration validation)
         supabase_service.update_job_status(job_id, JobStatus.GENERATING_AUDIO)
 
-        audio_bytes = await run_audio_phase(
+        # Build findings text for potential expansion
+        import json as _json
+        _findings_text = _json.dumps([
+            {
+                "claim": f.claim,
+                "classification": f.classification,
+                "confidence": f.confidence,
+                "source_urls": f.source_urls,
+                "podcast_potential": f.podcast_potential,
+                "usage_guidance": f.usage_guidance,
+            }
+            for f in verification.approved_findings
+        ], indent=2)
+
+        audio_bytes, script = await run_audio_phase(
             job_id=job_id,
             script=script,
+            episode_minutes=episode_minutes,
+            personas=personas,
+            findings_text=_findings_text,
         )
 
         if not audio_bytes:
@@ -137,6 +154,7 @@ async def process_podcast_job(job_id: UUID) -> None:
             job_id=job_id,
             script=script,
             audio_bytes=audio_bytes,
+            episode_minutes=episode_minutes,
             research_outputs=research_outputs,
             verification=verification,
         )

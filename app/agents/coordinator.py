@@ -144,35 +144,112 @@ async def run_scripting_phase(
 async def run_audio_phase(
     job_id: UUID,
     script: PodcastScript,
-) -> bytes:
-    """Generate episode audio from the script."""
-    from app.services.audio_service import generate_episode_audio
+    episode_minutes: int,
+    personas: list[str],
+    findings_text: str,
+) -> tuple[bytes, PodcastScript]:
+    """Generate episode audio with duration validation.
 
-    audio_bytes = await generate_episode_audio(script)
-
-    logger.info(
-        "Audio generation completed",
-        extra={"job_id": str(job_id), "audio_bytes": len(audio_bytes)},
+    If audio is too short (< 95% of requested duration), expands the script
+    and regenerates. Returns the final audio bytes and possibly-updated script.
+    """
+    from app.services.audio_service import (
+        generate_episode_audio,
+        measure_mp3_duration_seconds,
+        count_script_words,
+        WORDS_PER_MINUTE,
     )
+    from app.agents.podcast_editor import _expand_script, count_script_words as editor_count
 
-    return audio_bytes
+    min_duration_seconds = int(episode_minutes * 60 * 0.95)
+    max_audio_retries = 1
+
+    current_script = script
+
+    for attempt in range(1 + max_audio_retries):
+        audio_bytes = await generate_episode_audio(current_script)
+        actual_duration = measure_mp3_duration_seconds(audio_bytes)
+
+        logger.info(
+            "Audio duration check",
+            extra={
+                "job_id": str(job_id),
+                "attempt": attempt + 1,
+                "actual_seconds": round(actual_duration, 1),
+                "min_required_seconds": min_duration_seconds,
+                "word_count": count_script_words(current_script),
+            },
+        )
+
+        if actual_duration >= min_duration_seconds:
+            return audio_bytes, current_script
+
+        if attempt >= max_audio_retries:
+            logger.warning(
+                "Audio still short after expansion, proceeding anyway",
+                extra={
+                    "actual": round(actual_duration, 1),
+                    "required": min_duration_seconds,
+                },
+            )
+            return audio_bytes, current_script
+
+        # Calculate how many words to add
+        missing_seconds = (episode_minutes * 60) - actual_duration
+        missing_words = int(missing_seconds * WORDS_PER_MINUTE / 60)
+
+        logger.info(
+            "Audio too short, expanding script",
+            extra={
+                "missing_seconds": round(missing_seconds, 1),
+                "missing_words": missing_words,
+            },
+        )
+
+        try:
+            current_script = await _expand_script(
+                script=current_script,
+                episode_minutes=episode_minutes,
+                personas=personas,
+                findings_text=findings_text,
+                missing_words=missing_words,
+            )
+        except Exception as e:
+            logger.warning("Audio expansion failed", extra={"error": str(e)})
+            return audio_bytes, current_script
+
+    return audio_bytes, current_script
 
 
 async def run_upload_phase(
     job_id: UUID,
     script: PodcastScript,
     audio_bytes: bytes,
+    episode_minutes: int,
     research_outputs: list[AgentResearchOutput],
     verification: VerificationOutput,
 ) -> dict:
-    """Save all episode assets to temporary storage."""
-    from app.services.audio_service import estimate_duration_seconds
+    """Save all episode assets to temporary storage with duration metadata."""
+    from app.services.audio_service import (
+        count_script_words,
+        estimate_duration_seconds,
+        measure_mp3_duration_seconds,
+    )
     from app.services.temp_storage_service import (
         save_audio,
         save_citations,
         save_metadata,
         save_transcript,
     )
+
+    # Compute duration stats
+    script_word_count = count_script_words(script)
+    estimated_duration = estimate_duration_seconds(script)
+    actual_audio_duration = round(measure_mp3_duration_seconds(audio_bytes), 1)
+    target_word_count = episode_minutes * 175
+    minimum_word_count = int(target_word_count * 0.95)
+    requested_duration_seconds = episode_minutes * 60
+    minimum_allowed_duration_seconds = int(requested_duration_seconds * 0.95)
 
     # Build transcript data
     transcript_data = {
@@ -201,15 +278,22 @@ async def run_upload_phase(
                 "source_type": source.source_type,
             })
 
-    # Build metadata
-    duration_seconds = estimate_duration_seconds(script)
+    # Build metadata with duration stats
     metadata = {
         "title": script.title,
         "destination_name": script.destination_name,
         "personas": script.personas,
         "chapters": [ch.model_dump() for ch in script.chapters],
         "citations": citations,
-        "total_duration_seconds": duration_seconds,
+        "requested_duration_seconds": requested_duration_seconds,
+        "minimum_allowed_duration_seconds": minimum_allowed_duration_seconds,
+        "target_word_count": target_word_count,
+        "minimum_word_count": minimum_word_count,
+        "script_word_count": script_word_count,
+        "estimated_script_duration_seconds": estimated_duration,
+        "actual_audio_duration_seconds": actual_audio_duration,
+        "segment_count": len(script.segments),
+        "chapter_count": len(script.chapters),
     }
 
     # Save all assets to /tmp/wanderai/<job_id>/
@@ -226,13 +310,23 @@ async def run_upload_phase(
         metadata_object_key=metadata_key,
     )
 
+    logger.info(
+        "Episode assets saved",
+        extra={
+            "job_id": str(job_id),
+            "script_words": script_word_count,
+            "actual_duration": actual_audio_duration,
+            "target_duration": requested_duration_seconds,
+        },
+    )
+
     return {
         "audio_object_key": audio_key,
         "transcript_object_key": transcript_key,
         "metadata_object_key": metadata_key,
         "citations": citations,
         "chapters": [ch.model_dump() for ch in script.chapters],
-        "duration_seconds": duration_seconds,
+        "duration_seconds": int(actual_audio_duration),
     }
 
 
