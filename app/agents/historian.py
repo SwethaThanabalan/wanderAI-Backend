@@ -91,6 +91,18 @@ For each finding include: a specific factual claim, the source URL, confidence \
 (0-1), classification (verified_fact, documented_folklore, contested, or \
 unverified), podcast_potential (high, medium, low), and brief usage guidance.
 
+SOURCE PRIORITY (search for these types of sources specifically):
+1. Tribal nation websites and cultural centers
+2. National Park Service / government interpretive pages
+3. County and regional historical societies
+4. Local museums and archives
+5. University research and academic papers about the area
+6. Regional newspapers (historical articles, anniversary pieces)
+7. Oral history projects and community interviews
+8. Local heritage and preservation organizations
+9. State archives and historical records
+10. Documentary films and podcast episodes about the area
+
 Do NOT invent sources or URLs. Only cite what you actually find."""
 
 
@@ -115,9 +127,22 @@ def _build_user_prompt(
     ]
 
     if visit_date:
-        lines.append(f"\nThe visitor plans to visit around {visit_date}.")
+        lines.append(f"\nThe visitor plans to visit around {visit_date}. Include any seasonal events, festivals, or historical commemorations near that time.")
 
-    lines.append("\nProvide comprehensive historical research covering indigenous history, place-name origins, settlement history, major events, architecture, local industries, documented folklore, and contested interpretations.")
+    lines.append("""
+Search strategy — use DIVERSE queries like:
+- "[destination] history"
+- "[destination] indigenous peoples tribe"
+- "[destination] place name origin etymology"
+- "[destination] historical events timeline"
+- "[destination] local legends folklore"
+- "[destination] museum archives"
+- "[destination] notable people famous visitors"
+- "[destination] conservation history"
+- "[destination] cultural traditions ceremonies"
+- "[destination] local newspaper history"
+
+Look for LOCAL sources: tribal websites, county historical societies, regional museums, local newspaper archives, university research, park interpretive materials, oral history projects, and community heritage sites. These provide the authentic local perspective that makes a podcast feel like insider knowledge.""")
 
     return "\n".join(lines)
 

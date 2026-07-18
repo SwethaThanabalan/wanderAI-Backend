@@ -82,7 +82,18 @@ unverified), podcast_potential (high, medium, low), and brief usage guidance.
 
 IMPORTANT: Aim for at LEAST 10 findings. Cover multiple aspects, not just 2-3.
 Do NOT invent sources or URLs. Only cite what you actually find.
-Prefer official, government, and well-known travel sources."""
+
+SOURCE PRIORITY (search for these types of sources specifically):
+1. National Park Service / government park pages
+2. Local tourism boards and visitor centers (e.g., county tourism, chamber of commerce)
+3. Local photographers' blogs and guides specific to this area
+4. Regional newspapers and magazines
+5. Hiking and trail community sites (AllTrails, WTA, etc.)
+6. Local photography groups and forums
+7. Official park webcams and conditions pages
+8. Travel photographers who have written about this specific location
+9. Reddit threads and trip reports from visitors
+10. Local outdoor recreation guides"""
 
 
 def _build_user_prompt(
@@ -106,9 +117,20 @@ def _build_user_prompt(
     ]
 
     if visit_date:
-        lines.append(f"\nThe visitor plans to visit around {visit_date}.")
+        lines.append(f"\nThe visitor plans to visit around {visit_date}. Focus on what this place looks like in that specific season.")
 
-    lines.append("\nProvide comprehensive photography research covering viewpoints, lighting, restrictions, seasonal appearance, and hidden details.")
+    lines.append("""
+Search strategy — use DIVERSE queries like:
+- "[destination] photography guide"
+- "[destination] best viewpoints"
+- "[destination] [season] conditions"
+- "[destination] local tips photography"
+- "[destination] visitor center recommendations"
+- "[destination] drone rules tripod policy"
+- "[destination] hidden spots locals know"
+- "[destination] sunrise sunset times [month]"
+
+Look for LOCAL sources: regional tourism sites, local photographer blogs, park ranger tips, trail community posts, and visitor trip reports. These give the best insider information.""")
 
     return "\n".join(lines)
 

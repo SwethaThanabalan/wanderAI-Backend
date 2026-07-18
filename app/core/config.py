@@ -32,12 +32,12 @@ class Settings(BaseSettings):
     photographer_max_queries: int = 8
     photographer_max_sources: int = 12
     photographer_min_official_sources: int = 2
-    photographer_max_per_domain: int = 3
+    photographer_max_per_domain: int = 8
 
     historian_max_queries: int = 10
     historian_max_sources: int = 15
     historian_min_official_sources: int = 3
-    historian_max_per_domain: int = 3
+    historian_max_per_domain: int = 8
 
     # Processing
     research_timeout_seconds: int = 180
