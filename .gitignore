@@ -48,6 +48,9 @@ coverage.xml
 *.tar.gz
 *.whl
 
+# Audio test files
+*.mp3
+
 # OS
 .DS_Store
 Thumbs.db
