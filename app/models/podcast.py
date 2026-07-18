@@ -18,6 +18,7 @@ class DialogueType(StrEnum):
     TRANSITION = "transition"
     INTRO = "intro"
     OUTRO = "outro"
+    ADVICE = "advice"
 
 
 # --- Script Models ---

@@ -56,10 +56,18 @@ def setup_logging() -> None:
     root_logger.setLevel(log_level)
     root_logger.handlers = [handler]
 
-    # Suppress noisy third-party loggers
+    # Suppress noisy third-party loggers and HTTP debug that leaks credentials
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("hpack").setLevel(logging.WARNING)
+    logging.getLogger("h2").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
+    logging.getLogger("supabase").setLevel(logging.WARNING)
+    logging.getLogger("postgrest").setLevel(logging.WARNING)
+    logging.getLogger("realtime").setLevel(logging.WARNING)
+    logging.getLogger("gotrue").setLevel(logging.WARNING)
 
 
 def get_logger(name: str) -> logging.Logger:

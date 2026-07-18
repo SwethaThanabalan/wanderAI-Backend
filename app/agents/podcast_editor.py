@@ -5,15 +5,7 @@ The Podcast Editor does NOT have internet access — it works only
 with the approved findings provided by the Verification agent.
 
 Includes a script critic that can request one controlled revision.
-
-Responsibilities:
-- Use only approved findings
-- Generate a conversational script with distinct persona voices
-- Avoid repetitive or fake banter
-- Generate episode title and chapters
-- Map factual segments to source-backed findings
-- Respect requested episode length
-- Self-critique and revise once if needed
+Uses Pydantic structured output for reliable script generation.
 """
 
 import json
@@ -26,7 +18,12 @@ from app.services.openai_service import get_openai_client
 logger = get_logger(__name__)
 
 
-EDITOR_SYSTEM_PROMPT = """You are the WanderAI Podcast Editor. You create engaging, conversational 
+# The dialogue_type values must exactly match the DialogueType enum
+_ALLOWED_DIALOGUE_TYPES = "observation, fact, story, question, response, transition, intro, outro, advice"
+
+
+EDITOR_SYSTEM_PROMPT = f"""\
+You are the WanderAI Podcast Editor. You create engaging, conversational \
 travel podcast scripts featuring two personas: a Photographer and a Historian.
 
 Rules:
@@ -35,22 +32,14 @@ Rules:
 - The Photographer speaks with visual, sensory language about light, color, and composition.
 - The Historian provides context, stories, and cultural depth with measured authority.
 - Avoid repetitive or fake banter.
-- Create natural conversation flow with observations, facts, stories, and transitions.
+- Create natural conversation flow.
 - Generate an episode title, chapters, and dialogue segments.
 - Map each factual segment to its source finding IDs.
 - Target the requested episode duration.
 - Include an intro and outro.
 
-Output a valid JSON object with this structure:
-{
-  "title": "Episode title",
-  "destination_name": "...",
-  "episode_minutes_target": N,
-  "personas": ["photographer", "historian"],
-  "chapters": [{"chapter_id": "ch-01", "title": "...", "start_segment_id": "seg-01", "end_segment_id": "seg-03", "topic": "..."}],
-  "segments": [{"segment_id": "seg-01", "speaker": "photographer|historian", "dialogue": "...", "finding_ids": ["..."], "dialogue_type": "observation|fact|story|question|response|transition|intro|outro", "duration_estimate_seconds": N}],
-  "total_estimated_duration_seconds": N
-}"""
+IMPORTANT: Each segment's dialogue_type MUST be one of exactly these values: {_ALLOWED_DIALOGUE_TYPES}
+Do NOT use any other dialogue_type value."""
 
 
 CRITIC_SYSTEM_PROMPT = """You are the WanderAI Script Critic. Review the podcast script and identify issues.
@@ -71,14 +60,15 @@ If revision is needed, respond with:
 Output valid JSON only."""
 
 
-async def _generate_script(
+async def _generate_script_structured(
     destination_name: str,
     region: str | None,
     episode_minutes: int,
     personas: list[str],
     findings_text: str,
+    error_context: str | None = None,
 ) -> PodcastScript:
-    """Generate a podcast script from findings."""
+    """Generate a podcast script using Pydantic structured output."""
     client = get_openai_client()
 
     user_prompt = f"""Create a podcast episode for:
@@ -90,24 +80,62 @@ async def _generate_script(
 Approved findings to use:
 {findings_text}"""
 
-    response = await client.responses.create(
+    if error_context:
+        user_prompt += f"\n\nPREVIOUS ATTEMPT FAILED with this validation error:\n{error_context}\n\nFix the issue. Use ONLY allowed dialogue_type values: {_ALLOWED_DIALOGUE_TYPES}"
+
+    response = await client.responses.parse(
         model="gpt-4o",
         input=[
             {"role": "system", "content": EDITOR_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ],
-        text={"format": {"type": "json_object"}},
+        text_format=PodcastScript,
     )
 
-    output_text = ""
-    for item in response.output:
-        if hasattr(item, "content"):
-            for content_block in item.content:
-                if hasattr(content_block, "text"):
-                    output_text += content_block.text
+    parsed = response.output_parsed
+    if parsed is None:
+        raise ValueError("Podcast editor returned no parseable output")
 
-    script_data = json.loads(output_text)
-    return PodcastScript(**script_data)
+    return parsed
+
+
+async def _generate_script_with_retry(
+    destination_name: str,
+    region: str | None,
+    episode_minutes: int,
+    personas: list[str],
+    findings_text: str,
+) -> PodcastScript:
+    """Generate script with one retry on validation failure."""
+    try:
+        return await _generate_script_structured(
+            destination_name=destination_name,
+            region=region,
+            episode_minutes=episode_minutes,
+            personas=personas,
+            findings_text=findings_text,
+        )
+    except Exception as first_error:
+        logger.warning(
+            "Script generation failed, retrying with error context",
+            extra={"error": str(first_error)},
+        )
+
+        try:
+            return await _generate_script_structured(
+                destination_name=destination_name,
+                region=region,
+                episode_minutes=episode_minutes,
+                personas=personas,
+                findings_text=findings_text,
+                error_context=str(first_error),
+            )
+        except Exception as retry_error:
+            logger.error(
+                "Script generation failed on retry",
+                extra={"error": str(retry_error)},
+            )
+            raise
 
 
 async def _critique_script(script: PodcastScript, episode_minutes: int) -> dict:
@@ -143,9 +171,13 @@ Script:
 async def _revise_script(
     script: PodcastScript,
     revision_guidance: str,
+    destination_name: str,
+    region: str | None,
+    episode_minutes: int,
+    personas: list[str],
     findings_text: str,
 ) -> PodcastScript:
-    """Revise the script based on critic feedback."""
+    """Revise the script based on critic feedback using structured output."""
     client = get_openai_client()
 
     script_json = json.dumps(script.model_dump(), indent=2, default=str)
@@ -161,26 +193,22 @@ CURRENT SCRIPT:
 APPROVED FINDINGS (for reference):
 {findings_text}
 
-Output the revised script as valid JSON with the same structure."""
+Output the revised script. Use ONLY these dialogue_type values: {_ALLOWED_DIALOGUE_TYPES}"""
 
-    response = await client.responses.create(
+    response = await client.responses.parse(
         model="gpt-4o",
         input=[
             {"role": "system", "content": EDITOR_SYSTEM_PROMPT},
             {"role": "user", "content": revision_prompt},
         ],
-        text={"format": {"type": "json_object"}},
+        text_format=PodcastScript,
     )
 
-    output_text = ""
-    for item in response.output:
-        if hasattr(item, "content"):
-            for content_block in item.content:
-                if hasattr(content_block, "text"):
-                    output_text += content_block.text
+    parsed = response.output_parsed
+    if parsed is None:
+        raise ValueError("Script revision returned no parseable output")
 
-    script_data = json.loads(output_text)
-    return PodcastScript(**script_data)
+    return parsed
 
 
 async def run_podcast_editor(
@@ -194,6 +222,7 @@ async def run_podcast_editor(
 
     The editor has NO web access. It works exclusively with the
     findings that passed verification.
+    Uses Pydantic structured output for reliable parsing with one retry.
     """
     # Convert findings to JSON text
     findings_dicts = [
@@ -228,8 +257,8 @@ async def run_podcast_editor(
         },
     )
 
-    # Step 1: Generate initial script
-    script = await _generate_script(
+    # Step 1: Generate initial script with retry
+    script = await _generate_script_with_retry(
         destination_name=destination_name,
         region=region,
         episode_minutes=episode_minutes,
@@ -255,12 +284,16 @@ async def run_podcast_editor(
         issues = critique.get("issues", [])
         logger.info(
             "Script revision requested by critic",
-            extra={"issues": issues, "guidance": revision_guidance},
+            extra={"issues": issues},
         )
 
         revised_script = await _revise_script(
             script=script,
             revision_guidance=revision_guidance,
+            destination_name=destination_name,
+            region=region,
+            episode_minutes=episode_minutes,
+            personas=personas,
             findings_text=findings_text,
         )
 
