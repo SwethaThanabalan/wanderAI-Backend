@@ -189,3 +189,26 @@
 - [ ] 130. Add alerts for repeated failures
 - [ ] 131. Add cleanup for temporary research artifacts
 - [ ] 132. Add README setup instructions
+
+## Full Live Podcast MVP Tasks
+
+- [ ] Implement OpenAI live web search for Photographer
+- [ ] Implement OpenAI live web search for Historian
+- [ ] Persist source metadata in `research_sources`
+- [ ] Persist structured findings in `research_findings`
+- [ ] Add `verifying` job state
+- [ ] Implement evidence verification and rejection reasons
+- [ ] Ensure rejected findings never enter the script
+- [ ] Implement Podcast Editor without web access
+- [ ] Require approved finding IDs on factual dialogue segments
+- [ ] Generate a real two-person conversational script
+- [ ] Generate OpenAI TTS audio per dialogue segment
+- [ ] Assign consistent distinct voices
+- [ ] Concatenate segments into `episode.mp3`
+- [ ] Write transcript, citations, and metadata JSON
+- [ ] Add temporary storage service under `/tmp/wanderai`
+- [ ] Add 24-hour cleanup
+- [ ] Add audio, transcript, citations, and metadata endpoints
+- [ ] Return 404 for missing or incomplete assets
+- [ ] Remove Cloudflare R2 from the MVP
+- [ ] Verify the full Lake Crescent manual test

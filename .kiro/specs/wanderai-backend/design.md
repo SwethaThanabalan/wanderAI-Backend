@@ -633,3 +633,70 @@ Required tests:
 - Failed job persistence
 - Verifier rejects unsupported claims
 - Podcast editor receives approved findings only
+
+## Full Pipeline Implementation Update
+
+Create or update these modules:
+
+```text
+app/agents/photographer.py
+app/agents/historian.py
+app/agents/verifier.py
+app/agents/podcast_editor.py
+app/models/research.py
+app/models/podcast.py
+app/services/openai_service.py
+app/services/research_service.py
+app/services/tts_service.py
+app/services/audio_service.py
+app/services/temp_storage_service.py
+app/workflows/podcast_generation.py
+app/api/routes.py
+```
+
+### Job states
+
+Use:
+
+```text
+queued
+researching
+verifying
+scripting
+generating_audio
+completed
+failed
+```
+
+Persist every transition in Supabase.
+
+### Temporary storage
+
+Use `/tmp/wanderai/<job-id>/` only as transient backend storage. Add cleanup for directories older than 24 hours. Do not assume Render local disk is durable.
+
+### Local development
+
+When `APP_ENV=development`, use FastAPI `BackgroundTasks`. QStash is production-only and must not block local testing.
+
+### Environment variables
+
+The MVP environment file is:
+
+```env
+APP_ENV=development
+PUBLIC_API_URL=http://localhost:8000
+
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_ANON_KEY=
+
+OPENAI_API_KEY=
+
+QSTASH_TOKEN=
+QSTASH_CURRENT_SIGNING_KEY=
+QSTASH_NEXT_SIGNING_KEY=
+
+SENTRY_DSN=
+```
+
+Remove all R2 variables and R2 service code from the MVP.
