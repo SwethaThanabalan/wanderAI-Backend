@@ -39,7 +39,11 @@ def setup_logging() -> None:
     """Configure structured JSON logging for the application."""
     settings = get_settings()
 
-    log_level = logging.DEBUG if settings.is_development else logging.INFO
+    # Use LOG_LEVEL env var, fall back to DEBUG in dev / INFO in prod
+    level_name = settings.log_level.upper()
+    if level_name == "DEBUG" and settings.is_production:
+        level_name = "INFO"
+    log_level = getattr(logging, level_name, logging.INFO)
 
     # Safe JSON formatter that redacts secrets
     formatter = SafeJsonFormatter(

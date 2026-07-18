@@ -1,9 +1,5 @@
 """Security utilities for authentication and request verification."""
 
-import hashlib
-import hmac
-from typing import Any
-
 from fastapi import HTTPException, Request, status
 
 from app.core.config import get_settings
@@ -16,6 +12,7 @@ async def verify_qstash_signature(request: Request) -> bool:
     """Verify QStash webhook signature for production requests.
 
     In development mode, this check is skipped.
+    Uses the qstash library's built-in Receiver for proper verification.
     """
     settings = get_settings()
 
@@ -34,26 +31,30 @@ async def verify_qstash_signature(request: Request) -> bool:
         )
 
     body = await request.body()
+    url = str(request.url)
 
-    # Try current key first, then next key (for key rotation)
-    keys_to_try = [settings.qstash_current_signing_key]
-    if settings.qstash_next_signing_key:
-        keys_to_try.append(settings.qstash_next_signing_key)
+    try:
+        from qstash import Receiver
 
-    for key in keys_to_try:
-        expected = hmac.new(
-            key.encode(),
-            body,
-            hashlib.sha256,
-        ).hexdigest()
+        receiver = Receiver(
+            current_signing_key=settings.qstash_current_signing_key,
+            next_signing_key=settings.qstash_next_signing_key or "",
+        )
 
-        if hmac.compare_digest(expected, signature):
-            return True
+        receiver.verify(
+            body=body.decode("utf-8") if body else "",
+            signature=signature,
+            url=url,
+        )
 
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid QStash signature",
-    )
+        return True
+
+    except Exception as e:
+        logger.warning("QStash signature verification failed", extra={"error": str(e)})
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid QStash signature",
+        )
 
 
 async def get_current_user_id(request: Request) -> str | None:
@@ -68,11 +69,8 @@ async def get_current_user_id(request: Request) -> str | None:
         # MVP: allow unauthenticated requests
         return None
 
-    token = auth_header.removeprefix("Bearer ")
-
     # TODO: Validate Supabase JWT and extract user_id
     # For now, return None until Supabase Auth integration is complete
-    logger.debug("JWT token present but validation not yet implemented")
     return None
 
 

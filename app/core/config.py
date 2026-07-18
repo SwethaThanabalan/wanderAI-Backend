@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     # Application
     app_env: str = "development"
     public_api_url: str = "http://localhost:8000"
+    log_level: str = "DEBUG"
+
+    # CORS — comma-separated origins, or "*" for development
+    cors_origins: str = "*"
 
     # Supabase
     supabase_url: str = ""

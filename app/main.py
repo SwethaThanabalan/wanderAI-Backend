@@ -47,9 +47,17 @@ def create_app() -> FastAPI:
     )
 
     # CORS middleware
+    # In development: allow all origins for local testing
+    # In production: the native iOS app doesn't use browser CORS,
+    # but we restrict origins to the public API URL for security
+    if settings.cors_origins == "*":
+        origins = ["*"]
+    else:
+        origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"] if settings.is_development else [settings.public_api_url],
+        allow_origins=origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
