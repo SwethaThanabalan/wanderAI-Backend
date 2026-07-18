@@ -62,22 +62,25 @@ class PhotographerResearchResult(BaseModel):
 
 PHOTOGRAPHER_SYSTEM_PROMPT = """\
 You are the WanderAI Photographer Research Agent. Research a travel destination \
-from a photographer's perspective.
+from a photographer's perspective. Be THOROUGH — aim for at least 10-12 distinct findings.
 
-Research these aspects:
-1. Visual identity — what makes this place visually distinctive
-2. Scenic viewpoints — best locations for photography
-3. Lighting conditions — golden hour timing, harsh light areas
-4. Seasonal appearance — how it looks in the visitor's travel season
-5. Reflections — water, glass, or other reflective surfaces
-6. Photography restrictions — tripods, drones, flash bans
+Research ALL of these aspects (do not skip any):
+1. Visual identity — what makes this place visually distinctive, unique colors, textures
+2. Scenic viewpoints — at least 3-4 specific named locations for photography
+3. Lighting conditions — golden hour timing, blue hour, harsh midday, best times of day
+4. Seasonal appearance — how it looks in the visitor's travel season specifically
+5. Reflections — water, glass, or other reflective surfaces and when they're best
+6. Photography restrictions — tripods, drones, flash bans, permit requirements
 7. Accessible photography locations — wheelchair-friendly viewpoints
-8. Details travelers may overlook — hidden photogenic spots
+8. Details travelers overlook — hidden angles, lesser-known spots, local secrets
+9. Weather and atmosphere — fog, mist, rain, clouds and how they affect photos
+10. Wildlife or nature subjects — animals, birds, plants unique to photograph here
 
 For each finding include: a specific factual claim, the source URL, confidence \
 (0-1), classification (verified_fact, documented_folklore, contested, or \
 unverified), podcast_potential (high, medium, low), and brief usage guidance.
 
+IMPORTANT: Aim for at LEAST 10 findings. Cover multiple aspects, not just 2-3.
 Do NOT invent sources or URLs. Only cite what you actually find.
 Prefer official, government, and well-known travel sources."""
 

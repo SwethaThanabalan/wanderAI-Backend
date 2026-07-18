@@ -29,18 +29,18 @@ class Settings(BaseSettings):
     temp_storage_max_age_hours: int = 24
 
     # Research budgets
-    photographer_max_queries: int = 5
-    photographer_max_sources: int = 7
-    photographer_min_official_sources: int = 1
-    photographer_max_per_domain: int = 2
+    photographer_max_queries: int = 8
+    photographer_max_sources: int = 12
+    photographer_min_official_sources: int = 2
+    photographer_max_per_domain: int = 3
 
-    historian_max_queries: int = 7
-    historian_max_sources: int = 10
-    historian_min_official_sources: int = 2
-    historian_max_per_domain: int = 2
+    historian_max_queries: int = 10
+    historian_max_sources: int = 15
+    historian_min_official_sources: int = 3
+    historian_max_per_domain: int = 3
 
     # Processing
-    research_timeout_seconds: int = 120
+    research_timeout_seconds: int = 180
     max_episode_minutes: int = 20
     min_episode_minutes: int = 3
 
