@@ -132,7 +132,7 @@ async def run_audio_phase(
     script: PodcastScript,
 ) -> bytes:
     """Generate episode audio from the script."""
-    from app.services.tts_service import generate_episode_audio
+    from app.services.audio_service import generate_episode_audio
 
     audio_bytes = await generate_episode_audio(script)
 
@@ -151,8 +151,14 @@ async def run_upload_phase(
     research_outputs: list[AgentResearchOutput],
     verification: VerificationOutput,
 ) -> dict:
-    """Upload all episode assets to object storage."""
-    from app.services.storage_service import upload_audio, upload_metadata, upload_transcript
+    """Save all episode assets to temporary storage."""
+    from app.services.audio_service import estimate_duration_seconds
+    from app.services.temp_storage_service import (
+        save_audio,
+        save_citations,
+        save_metadata,
+        save_transcript,
+    )
 
     # Build transcript data
     transcript_data = {
@@ -163,12 +169,13 @@ async def run_upload_phase(
                 "speaker": seg.speaker,
                 "dialogue": seg.dialogue,
                 "dialogue_type": seg.dialogue_type,
+                "finding_ids": seg.finding_ids,
             }
             for seg in script.segments
         ],
     }
 
-    # Build metadata
+    # Build citations
     citations = []
     for output in research_outputs:
         for source in output.sources:
@@ -180,19 +187,22 @@ async def run_upload_phase(
                 "source_type": source.source_type,
             })
 
+    # Build metadata
+    duration_seconds = estimate_duration_seconds(script)
     metadata = {
         "title": script.title,
         "destination_name": script.destination_name,
         "personas": script.personas,
         "chapters": [ch.model_dump() for ch in script.chapters],
         "citations": citations,
-        "total_duration_seconds": script.total_estimated_duration_seconds,
+        "total_duration_seconds": duration_seconds,
     }
 
-    # Upload all assets
-    audio_key = upload_audio(job_id, audio_bytes)
-    transcript_key = upload_transcript(job_id, transcript_data)
-    metadata_key = upload_metadata(job_id, metadata)
+    # Save all assets to /tmp/wanderai/<job_id>/
+    audio_key = save_audio(job_id, audio_bytes)
+    transcript_key = save_transcript(job_id, transcript_data)
+    citations_key = save_citations(job_id, citations)
+    metadata_key = save_metadata(job_id, metadata)
 
     # Save object keys to the job record
     supabase_service.save_job_object_keys(
@@ -208,6 +218,7 @@ async def run_upload_phase(
         "metadata_object_key": metadata_key,
         "citations": citations,
         "chapters": [ch.model_dump() for ch in script.chapters],
+        "duration_seconds": duration_seconds,
     }
 
 

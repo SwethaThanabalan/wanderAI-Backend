@@ -144,7 +144,7 @@ async def process_podcast_job(job_id: UUID) -> None:
             stop_id=stop_id,
             title=script.title,
             destination_name=destination_name,
-            duration_seconds=int(script.total_estimated_duration_seconds or 0),
+            duration_seconds=upload_result.get("duration_seconds") or int(script.total_estimated_duration_seconds or 0),
             personas=personas,
             chapters=upload_result.get("chapters"),
             citations=upload_result.get("citations"),
@@ -159,7 +159,7 @@ async def process_podcast_job(job_id: UUID) -> None:
             result={
                 "episode_id": episode["id"],
                 "title": script.title,
-                "duration_seconds": int(script.total_estimated_duration_seconds or 0),
+                "duration_seconds": upload_result.get("duration_seconds") or int(script.total_estimated_duration_seconds or 0),
                 "segments_count": len(script.segments),
                 "chapters_count": len(script.chapters),
             },

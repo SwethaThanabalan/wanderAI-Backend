@@ -3,7 +3,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.api.dependencies import get_app_settings, get_request_id, get_user_id
 from app.core.config import Settings
@@ -18,6 +18,12 @@ from app.models.jobs import (
 )
 from app.services import supabase_service
 from app.services.qstash_service import enqueue_job_processing
+from app.services.temp_storage_service import (
+    get_audio_path,
+    get_citations_path,
+    get_metadata_path,
+    get_transcript_path,
+)
 from app.workflows.podcast_generation import process_podcast_job
 
 logger = get_logger(__name__)
@@ -113,6 +119,7 @@ async def get_podcast_job(
     validate_user_ownership(job.get("user_id"), user_id)
 
     # Build response
+    settings = get_app_settings()
     response = PodcastJobResponse(
         job_id=UUID(job["id"]),
         status=job["status"],
@@ -130,17 +137,81 @@ async def get_podcast_job(
     if job["status"] == JobStatus.COMPLETED and job.get("result"):
         episode = supabase_service.get_podcast_episode_by_job(job_id)
         if episode:
+            base_url = settings.public_api_url
             response.episode = EpisodeMetadata(
                 episode_id=UUID(episode["id"]),
                 title=episode["title"],
                 duration_seconds=episode.get("duration_seconds"),
-                audio_url=None,  # Signed URLs generated on demand
-                transcript_url=None,
+                audio_url=f"{base_url}/v1/episodes/{job_id}/audio",
+                transcript_url=f"{base_url}/v1/episodes/{job_id}/transcript",
                 chapters=episode.get("chapters"),
                 citations=episode.get("citations"),
             )
 
     return response
+
+
+# --- Episode Asset Endpoints ---
+
+
+@router.get("/v1/episodes/{job_id}/audio")
+async def get_episode_audio(job_id: UUID):
+    """Download the episode audio file (MP3).
+
+    Returns 404 if the job is not complete or audio is unavailable.
+    """
+    path = get_audio_path(job_id)
+    if not path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Audio not found. Job may still be processing.",
+        )
+    return FileResponse(path, media_type="audio/mpeg", filename=f"{job_id}.mp3")
+
+
+@router.get("/v1/episodes/{job_id}/transcript")
+async def get_episode_transcript(job_id: UUID):
+    """Download the episode transcript JSON.
+
+    Returns 404 if unavailable.
+    """
+    path = get_transcript_path(job_id)
+    if not path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Transcript not found. Job may still be processing.",
+        )
+    return FileResponse(path, media_type="application/json", filename="transcript.json")
+
+
+@router.get("/v1/episodes/{job_id}/citations")
+async def get_episode_citations(job_id: UUID):
+    """Download the episode citations JSON.
+
+    Returns 404 if unavailable.
+    """
+    path = get_citations_path(job_id)
+    if not path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Citations not found. Job may still be processing.",
+        )
+    return FileResponse(path, media_type="application/json", filename="citations.json")
+
+
+@router.get("/v1/episodes/{job_id}/metadata")
+async def get_episode_metadata(job_id: UUID):
+    """Download the episode metadata JSON.
+
+    Returns 404 if unavailable.
+    """
+    path = get_metadata_path(job_id)
+    if not path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Metadata not found. Job may still be processing.",
+        )
+    return FileResponse(path, media_type="application/json", filename="metadata.json")
 
 
 # --- Internal Processing ---
@@ -180,29 +251,3 @@ async def process_job_internal(
     background_tasks.add_task(process_podcast_job, job_id)
 
     return {"status": "processing", "job_id": str(job_id)}
-
-
-# --- File Download (local storage) ---
-
-
-@router.get("/v1/files/{file_path:path}")
-async def download_file(file_path: str):
-    """Serve locally stored episode files."""
-    from app.services.storage_service import get_file_path
-
-    absolute_path = get_file_path(file_path)
-
-    if not absolute_path:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="File not found",
-        )
-
-    # Determine media type
-    media_type = "application/octet-stream"
-    if file_path.endswith(".mp3"):
-        media_type = "audio/mpeg"
-    elif file_path.endswith(".json"):
-        media_type = "application/json"
-
-    return FileResponse(absolute_path, media_type=media_type)

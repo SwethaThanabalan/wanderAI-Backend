@@ -24,6 +24,12 @@ async def lifespan(app: FastAPI):
         extra={"env": settings.app_env, "url": settings.public_api_url},
     )
 
+    # Clean up temp files older than 24 hours on startup
+    from app.services.temp_storage_service import cleanup_old_temp_files
+    cleaned = cleanup_old_temp_files()
+    if cleaned:
+        logger.info("Startup cleanup completed", extra={"removed": cleaned})
+
     yield
 
     logger.info("WanderAI Backend shutting down")

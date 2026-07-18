@@ -58,6 +58,3 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
-
-# Local storage (POC)
-storage/

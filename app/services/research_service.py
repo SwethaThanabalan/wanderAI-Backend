@@ -4,20 +4,12 @@ import asyncio
 from typing import Any
 
 import httpx
-from openai import AsyncOpenAI
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.services.openai_service import get_openai_client
 
 logger = get_logger(__name__)
-
-
-def _get_openai_client() -> AsyncOpenAI:
-    """Return an async OpenAI client."""
-    settings = get_settings()
-    if not settings.openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY is not configured.")
-    return AsyncOpenAI(api_key=settings.openai_api_key)
 
 
 async def web_search(query: str, num_results: int = 5) -> list[dict[str, Any]]:
@@ -25,8 +17,7 @@ async def web_search(query: str, num_results: int = 5) -> list[dict[str, Any]]:
 
     Returns a list of search result dicts with url, title, and snippet.
     """
-    settings = get_settings()
-    client = _get_openai_client()
+    client = get_openai_client()
 
     try:
         response = await client.responses.create(
@@ -64,7 +55,7 @@ async def generate_research(
 
     Returns the model's text response.
     """
-    client = _get_openai_client()
+    client = get_openai_client()
 
     try:
         messages = [
@@ -107,7 +98,7 @@ async def research_with_web_search(
     Uses OpenAI Responses API with web_search_preview tool.
     Returns both the text response and any URLs cited.
     """
-    client = _get_openai_client()
+    client = get_openai_client()
 
     try:
         messages = [

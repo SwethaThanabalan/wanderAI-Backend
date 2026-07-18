@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     qstash_current_signing_key: str | None = None
     qstash_next_signing_key: str | None = None
 
-    # Local storage (POC)
-    local_storage_path: str = "./storage"
+    # Temp storage cleanup
+    temp_storage_max_age_hours: int = 24
 
     # Research budgets
     photographer_max_queries: int = 5
