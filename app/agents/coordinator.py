@@ -126,6 +126,7 @@ async def run_scripting_phase(
     episode_minutes: int,
     personas: list[str],
     verification: VerificationOutput,
+    visit_date: str | None = None,
 ) -> PodcastScript:
     """Run the podcast editor to generate the script."""
     from app.agents.podcast_editor import run_podcast_editor
@@ -136,6 +137,7 @@ async def run_scripting_phase(
         episode_minutes=episode_minutes,
         personas=personas,
         approved_findings=verification.approved_findings,
+        visit_date=visit_date,
     )
 
     return script

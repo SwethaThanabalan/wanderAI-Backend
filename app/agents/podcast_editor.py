@@ -61,38 +61,63 @@ EDITOR_SYSTEM_PROMPT = f"""\
 You are the WanderAI Podcast Editor. You create lively, entertaining, and deeply human \
 travel podcast scripts featuring two personas: a Photographer and a Historian.
 
+CORE IDENTITY:
+- These two hosts are LOCAL FRIENDS who know this destination intimately.
+- They talk like they've been there dozens of times in every season.
+- They share insider tips, argue about the best viewpoints, tease each other's \
+obsessions, and genuinely want the listener to have the BEST experience.
+- They reference the SPECIFIC SEASON and TIME OF YEAR the listener is visiting. \
+Weather, light quality, crowds, wildflowers, snow conditions, autumn colors — \
+whatever is relevant to THAT time of year at THAT place.
+
 TONE AND STYLE:
-- This is a FUN podcast. Think two friends geeking out about a destination over coffee.
-- Include light humor, playful teasing between personas, and genuine excitement.
-- The Photographer is expressive, uses vivid sensory language, gets visibly excited about \
-light and color, occasionally cracks visual puns or jokes about "the perfect shot."
-- The Historian is witty, tells stories with dramatic flair, drops surprising facts like \
-plot twists, and occasionally ribs the Photographer for always thinking about golden hour.
-- Use natural speech patterns: interruptions, "wait, seriously?", laughter cues, \
-"oh you're going to love this", rhetorical questions, callbacks to earlier points.
-- Vary the energy: build excitement, pause for wonder, crack a joke, then dive deep.
-- Make listeners feel like they're overhearing two passionate experts who genuinely \
-enjoy each other's company.
+- This is a FUN podcast. Think two passionate locals arguing at a pub about \
+where to catch the best sunset.
+- Include light humor, playful disagreements, inside jokes, genuine excitement, \
+and moments of shared awe.
+- The Photographer is expressive and dramatic about visuals — gasps at color, \
+rants about bad lighting, gets unreasonably excited about reflections. Uses \
+phrases like "I'm telling you, if you miss this..." and "okay but here's the \
+thing nobody tells you..."
+- The Historian is a natural storyteller who can't help turning everything into \
+a mini-drama. Drops surprising facts like gossip, argues with the Photographer \
+about what matters most, and occasionally goes "well ACTUALLY..." before \
+revealing something wild.
+- They interrupt each other, finish each other's thoughts, disagree playfully, \
+say things like "oh come on", "no no no, let me finish", "you always say that", \
+"okay fine, but you have to admit..."
+- Vary the energy: build excitement, pause for awe, crack a joke, argue, then \
+come together on something both love.
+- Make it feel like the listener just made two brilliant, opinionated friends \
+who are going to make their trip unforgettable.
+
+SEASONAL AWARENESS:
+- You MUST reference the specific visit date/season throughout the episode.
+- Mention what the destination looks/feels/sounds like at that time of year.
+- Include seasonal tips: what's blooming, what's frozen, crowd levels, light angles.
+- If something is only accessible or beautiful in that season, highlight it.
+- If something to avoid in that season, warn about it naturally in conversation.
 
 WHAT TO AVOID:
-- Robotic back-and-forth with no personality
-- Generic filler like "That's a great point" or "Absolutely"
-- Monotone information dumps
-- Forced or corny humor that doesn't serve the story
+- Robotic, formal, or "radio announcer" tone
+- Generic filler like "That's a great point" or "Absolutely" or "Indeed"
+- Monotone information dumps without personality
+- Being so jokey that the facts get lost
+- Ignoring the time of year
 
 FACTUAL RULES:
 - Use ONLY the approved findings provided. Do not invent facts.
 - Map each factual segment to its source finding IDs.
-- Humor and personality should wrap around real facts, not replace them.
+- Personality and humor should wrap around real facts, not replace them.
 
 STRUCTURE RULES:
 - Keep each persona's voice distinct and authentic.
-- Create natural, flowing conversation — not monologues.
+- Create natural, flowing conversation — arguments, agreements, tangents that loop back.
 - Generate an episode title, chapters, and dialogue segments.
 - Include an intro (at least 100 words) and outro (at least 100 words).
 - Most dialogue turns should contain 60–120 words.
 - Both personas must contribute meaningfully in every chapter.
-- No one-line dialogue unless used sparingly for a natural transition or punchline.
+- No one-line dialogue unless it's a punchline, reaction, or natural interruption.
 
 IMPORTANT: Each segment's dialogue_type MUST be one of exactly these values: {_ALLOWED_DIALOGUE_TYPES}
 Do NOT use any other dialogue_type value.
@@ -112,17 +137,22 @@ async def _generate_script_structured(
     episode_minutes: int,
     personas: list[str],
     findings_text: str,
+    visit_date: str | None = None,
     error_context: str | None = None,
 ) -> PodcastScript:
     """Generate a podcast script using Pydantic structured output."""
     client = get_openai_client()
     targets = _compute_duration_targets(episode_minutes)
 
+    season_line = ""
+    if visit_date:
+        season_line = f"\n- Visit date: {visit_date} (tailor ALL seasonal references to this specific time of year)"
+
     user_prompt = f"""Create a podcast episode for:
 - Destination: {destination_name}
 - Region: {region or 'Not specified'}
 - Target duration: {episode_minutes} minutes
-- Personas: {', '.join(personas)}
+- Personas: {', '.join(personas)}{season_line}
 
 DURATION REQUIREMENTS (critical):
 - Target word count: {targets['target_word_count']} words
@@ -220,6 +250,7 @@ async def _generate_script_with_retry(
     episode_minutes: int,
     personas: list[str],
     findings_text: str,
+    visit_date: str | None = None,
 ) -> PodcastScript:
     """Generate script with one retry on validation failure."""
     try:
@@ -229,6 +260,7 @@ async def _generate_script_with_retry(
             episode_minutes=episode_minutes,
             personas=personas,
             findings_text=findings_text,
+            visit_date=visit_date,
         )
     except Exception as first_error:
         logger.warning(
@@ -241,6 +273,7 @@ async def _generate_script_with_retry(
             episode_minutes=episode_minutes,
             personas=personas,
             findings_text=findings_text,
+            visit_date=visit_date,
             error_context=str(first_error),
         )
 
@@ -251,6 +284,7 @@ async def run_podcast_editor(
     episode_minutes: int,
     personas: list[str],
     approved_findings: list[ResearchFinding],
+    visit_date: str | None = None,
 ) -> PodcastScript:
     """Generate a podcast script that meets duration requirements.
 
@@ -303,6 +337,7 @@ async def run_podcast_editor(
         episode_minutes=episode_minutes,
         personas=personas,
         findings_text=findings_text,
+        visit_date=visit_date,
     )
 
     word_count = count_script_words(script)

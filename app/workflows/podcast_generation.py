@@ -116,6 +116,7 @@ async def process_podcast_job(job_id: UUID) -> None:
             episode_minutes=episode_minutes,
             personas=personas,
             verification=verification,
+            visit_date=visit_date,
         )
 
         if not script.segments:
