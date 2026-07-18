@@ -91,7 +91,7 @@ async def generate_segment_audio(segment: ScriptSegment) -> bytes:
     Returns raw MP3 bytes.
     """
     client = get_openai_client()
-    voice = PERSONA_VOICES.get(segment.speaker, "alloy")
+    voice = PERSONA_VOICES.get(segment.speaker.lower(), "alloy")
 
     try:
         response = await client.audio.speech.create(
