@@ -98,8 +98,13 @@ class TestWorkflowStateTransitions:
     async def test_transitions_to_researching_then_verifying(
         self, mock_supabase, mock_research, mock_verify, mock_store
     ):
-        """Job should transition through researching and verifying states."""
-        from app.models.research import AgentResearchOutput, VerificationOutput
+        """Job with findings should transition through researching and verifying states."""
+        from app.models.research import (
+            AgentResearchOutput,
+            ResearchFinding,
+            FindingClassification,
+            VerificationOutput,
+        )
         from app.workflows.podcast_generation import process_podcast_job
 
         job_id = uuid4()
@@ -116,8 +121,20 @@ class TestWorkflowStateTransitions:
             "stop_id": str(uuid4()),
         }
 
+        # Return research with at least one finding so we reach verification
         mock_research.return_value = [
-            AgentResearchOutput(persona_id="photographer", destination_name="Test")
+            AgentResearchOutput(
+                persona_id="photographer",
+                destination_name="Test",
+                findings=[
+                    ResearchFinding(
+                        claim="Test claim",
+                        classification=FindingClassification.VERIFIED_FACT,
+                        confidence=0.9,
+                        source_urls=["https://example.com"],
+                    )
+                ],
+            )
         ]
 
         # Verification returns no approved findings to stop the pipeline
@@ -137,3 +154,45 @@ class TestWorkflowStateTransitions:
 
         assert JobStatus.RESEARCHING in status_values
         assert JobStatus.VERIFYING in status_values
+
+    @pytest.mark.asyncio
+    @patch("app.workflows.podcast_generation.run_research_phase")
+    @patch("app.workflows.podcast_generation.supabase_service")
+    async def test_zero_findings_fails_before_verification(self, mock_supabase, mock_research):
+        """Job with zero findings should fail without reaching verification."""
+        from app.models.research import AgentResearchOutput
+        from app.workflows.podcast_generation import process_podcast_job
+
+        job_id = uuid4()
+        mock_supabase.get_research_job.return_value = {
+            "id": str(job_id),
+            "status": "queued",
+            "destination_name": "Test",
+            "region": None,
+            "visit_date": None,
+            "episode_minutes": 8,
+            "personas": ["photographer"],
+            "user_id": None,
+            "trip_id": str(uuid4()),
+            "stop_id": str(uuid4()),
+        }
+
+        # Research returns output with zero findings
+        mock_research.return_value = [
+            AgentResearchOutput(persona_id="photographer", destination_name="Test")
+        ]
+
+        await process_podcast_job(job_id)
+
+        # Should go RESEARCHING then FAILED (never VERIFYING)
+        status_values = []
+        for c in mock_supabase.update_job_status.call_args_list:
+            args, kwargs = c
+            if len(args) >= 2:
+                status_values.append(args[1])
+            elif "status" in kwargs:
+                status_values.append(kwargs["status"])
+
+        assert JobStatus.RESEARCHING in status_values
+        assert JobStatus.FAILED in status_values
+        assert JobStatus.VERIFYING not in status_values

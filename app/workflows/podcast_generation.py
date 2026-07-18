@@ -83,6 +83,11 @@ async def process_podcast_job(job_id: UUID) -> None:
         if not research_outputs:
             raise RuntimeError("All research agents failed to produce results")
 
+        # Fail early if no findings to verify
+        total_findings = sum(len(o.findings) for o in research_outputs)
+        if total_findings == 0:
+            raise RuntimeError("Research produced zero findings — nothing to verify")
+
         # 3. Verification phase
         supabase_service.update_job_status(job_id, JobStatus.VERIFYING)
 

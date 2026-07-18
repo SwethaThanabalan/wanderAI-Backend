@@ -1,12 +1,38 @@
-"""Structured logging configuration."""
+"""Structured logging configuration with sensitive data filtering."""
 
 import logging
+import re
 import sys
 import uuid
 
 from pythonjsonlogger import jsonlogger
 
 from app.core.config import get_settings
+
+# Patterns that indicate sensitive values
+_SENSITIVE_PATTERNS = [
+    re.compile(r"(sk-[a-zA-Z0-9_-]{20,})"),          # OpenAI keys
+    re.compile(r"(eyJ[a-zA-Z0-9_-]{50,})"),           # JWTs (Supabase, QStash)
+    re.compile(r"(sb_secret_[a-zA-Z0-9_-]+)"),        # Supabase secret keys
+    re.compile(r"(sig_[a-zA-Z0-9_-]{20,})"),          # QStash signing keys
+]
+
+
+def _redact_sensitive(value: str) -> str:
+    """Replace sensitive tokens in a string with redacted placeholders."""
+    for pattern in _SENSITIVE_PATTERNS:
+        value = pattern.sub(lambda m: m.group()[:8] + "***REDACTED***", value)
+    return value
+
+
+class SafeJsonFormatter(jsonlogger.JsonFormatter):
+    """JSON formatter that redacts sensitive values from log output."""
+
+    def process_log_record(self, log_record: dict) -> dict:
+        for key, value in log_record.items():
+            if isinstance(value, str):
+                log_record[key] = _redact_sensitive(value)
+        return log_record
 
 
 def setup_logging() -> None:
@@ -15,8 +41,8 @@ def setup_logging() -> None:
 
     log_level = logging.DEBUG if settings.is_development else logging.INFO
 
-    # JSON formatter for structured logs
-    formatter = jsonlogger.JsonFormatter(
+    # Safe JSON formatter that redacts secrets
+    formatter = SafeJsonFormatter(
         fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S",
     )

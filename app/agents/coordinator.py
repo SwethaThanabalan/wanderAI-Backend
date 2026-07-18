@@ -33,7 +33,10 @@ async def run_research_phase(
     visit_date: str | None,
     personas: list[str],
 ) -> list[AgentResearchOutput]:
-    """Run all research agents in parallel with timeout."""
+    """Run all research agents in parallel with timeout.
+
+    Raises immediately if any agent fails (no silent empty results).
+    """
     from app.agents.historian import run_historian_research
     from app.agents.photographer import run_photographer_research
 
@@ -68,18 +71,29 @@ async def run_research_phase(
             "Research phase timed out",
             extra={"job_id": str(job_id), "timeout": settings.research_timeout_seconds},
         )
-        raise
+        raise RuntimeError(f"Research timed out after {settings.research_timeout_seconds}s")
 
-    # Process results, filtering out exceptions
+    # Fail immediately if any agent returned an exception
     outputs: list[AgentResearchOutput] = []
+    errors: list[str] = []
+
     for result in results:
         if isinstance(result, Exception):
+            errors.append(str(result))
             logger.error(
                 "Research agent failed",
                 extra={"job_id": str(job_id), "error": str(result)},
             )
         elif isinstance(result, AgentResearchOutput):
             outputs.append(result)
+
+    if errors:
+        raise RuntimeError(f"Research agent(s) failed: {'; '.join(errors)}")
+
+    # Check total findings across all agents
+    total_findings = sum(len(o.findings) for o in outputs)
+    if total_findings == 0:
+        raise RuntimeError("Research produced zero findings across all agents")
 
     return outputs
 
