@@ -12,7 +12,10 @@ async def verify_qstash_signature(request: Request) -> bool:
     """Verify QStash webhook signature for production requests.
 
     In development mode, this check is skipped.
-    Uses the qstash library's built-in Receiver for proper verification.
+
+    Uses PUBLIC_API_URL + request.url.path as the verification URL,
+    since Render's internal request URL may differ from the public URL
+    that QStash signed against.
     """
     settings = get_settings()
 
@@ -31,26 +34,36 @@ async def verify_qstash_signature(request: Request) -> bool:
         )
 
     body = await request.body()
-    url = str(request.url)
+
+    # Reconstruct the URL QStash signed: PUBLIC_API_URL + path
+    verification_url = (
+        f"{settings.public_api_url.rstrip('/')}{request.url.path}"
+    )
 
     try:
         from qstash import Receiver
 
         receiver = Receiver(
-            current_signing_key=settings.qstash_current_signing_key,
-            next_signing_key=settings.qstash_next_signing_key or "",
+            current_signing_key=settings.qstash_current_signing_key.strip(),
+            next_signing_key=(settings.qstash_next_signing_key or "").strip(),
         )
 
         receiver.verify(
-            body=body.decode("utf-8") if body else "",
+            body=body.decode("utf-8"),
             signature=signature,
-            url=url,
+            url=verification_url,
         )
 
         return True
 
     except Exception as e:
-        logger.warning("QStash signature verification failed", extra={"error": str(e)})
+        logger.warning(
+            "QStash signature verification failed",
+            extra={
+                "verification_url": verification_url,
+                "exception_type": type(e).__name__,
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid QStash signature",
@@ -70,7 +83,6 @@ async def get_current_user_id(request: Request) -> str | None:
         return None
 
     # TODO: Validate Supabase JWT and extract user_id
-    # For now, return None until Supabase Auth integration is complete
     return None
 
 
@@ -83,11 +95,9 @@ def validate_user_ownership(
     Skipped when auth is not yet enabled (both values None).
     """
     if requesting_user_id is None:
-        # Auth not yet enforced
         return
 
     if resource_user_id is None:
-        # Resource has no owner assigned yet
         return
 
     if resource_user_id != requesting_user_id:
