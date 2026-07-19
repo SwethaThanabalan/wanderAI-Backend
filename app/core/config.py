@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
 
     # QStash (production job processing)
+    qstash_url: str = "https://qstash-us-east-1.upstash.io"
     qstash_token: str | None = None
     qstash_current_signing_key: str | None = None
     qstash_next_signing_key: str | None = None

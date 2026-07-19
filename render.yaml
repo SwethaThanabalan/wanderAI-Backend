@@ -28,6 +28,9 @@ services:
       - key: QSTASH_TOKEN
         sync: false
 
+      - key: QSTASH_URL
+        value: https://qstash-us-east-1.upstash.io
+
       - key: QSTASH_CURRENT_SIGNING_KEY
         sync: false
 

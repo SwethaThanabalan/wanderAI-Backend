@@ -17,7 +17,7 @@ from app.models.jobs import (
     PodcastJobResponse,
 )
 from app.services import supabase_service
-from app.services.qstash_service import enqueue_job_processing
+from app.services.qstash_service import QStashPublishError, enqueue_job_processing
 from app.services.temp_storage_service import (
     get_audio_path,
     get_citations_path,
@@ -100,7 +100,13 @@ async def create_podcast_job(
         background_tasks.add_task(process_podcast_job, job_id)
     else:
         # Production: enqueue via QStash
-        await enqueue_job_processing(job_id)
+        try:
+            await enqueue_job_processing(job_id)
+        except QStashPublishError as e:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Job created but background processing is temporarily unavailable. Please retry.",
+            )
 
     return CreatePodcastJobResponse(job_id=job_id, status=JobStatus.QUEUED)
 
