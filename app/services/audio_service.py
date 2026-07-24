@@ -13,9 +13,13 @@ from app.services.openai_service import get_openai_client
 logger = get_logger(__name__)
 
 # Consistent voice assignments per persona
+# Each persona gets a distinct TTS voice for recognizable identity
 PERSONA_VOICES: dict[str, str] = {
-    "photographer": "nova",
-    "historian": "onyx",
+    "photographer": "nova",       # Warm, expressive female — visual excitement
+    "historian": "onyx",          # Deep, authoritative male — dramatic storytelling
+    "geologist": "fable",         # Expressive, British-accented — nerdy enthusiasm
+    "foodie": "shimmer",          # Clear, upbeat female — infectious energy
+    "storyteller": "echo",        # Smooth, warm male — campfire narrator
 }
 
 # Duration constants

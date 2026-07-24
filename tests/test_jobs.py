@@ -74,7 +74,7 @@ class TestCreatePodcastJob:
 
     def test_create_job_invalid_persona(self, client):
         """Unsupported persona should return 422."""
-        request = {**VALID_JOB_REQUEST, "personas": ["geologist"]}
+        request = {**VALID_JOB_REQUEST, "personas": ["astronaut"]}
 
         response = client.post("/v1/podcast-jobs", json=request)
 

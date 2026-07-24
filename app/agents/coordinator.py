@@ -39,27 +39,30 @@ async def run_research_phase(
     """
     from app.agents.historian import run_historian_research
     from app.agents.photographer import run_photographer_research
+    from app.agents.geologist import run_geologist_research
+    from app.agents.foodie import run_foodie_research
+    from app.agents.storyteller import run_storyteller_research
 
     settings = get_settings()
     tasks = []
 
-    if "photographer" in personas:
-        tasks.append(
-            run_photographer_research(
-                destination_name=destination_name,
-                region=region,
-                visit_date=visit_date,
-            )
-        )
+    agent_map = {
+        "photographer": run_photographer_research,
+        "historian": run_historian_research,
+        "geologist": run_geologist_research,
+        "foodie": run_foodie_research,
+        "storyteller": run_storyteller_research,
+    }
 
-    if "historian" in personas:
-        tasks.append(
-            run_historian_research(
-                destination_name=destination_name,
-                region=region,
-                visit_date=visit_date,
+    for persona in personas:
+        if persona in agent_map:
+            tasks.append(
+                agent_map[persona](
+                    destination_name=destination_name,
+                    region=region,
+                    visit_date=visit_date,
+                )
             )
-        )
 
     try:
         results = await asyncio.wait_for(

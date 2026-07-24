@@ -12,6 +12,9 @@ class Persona(StrEnum):
 
     PHOTOGRAPHER = "photographer"
     HISTORIAN = "historian"
+    GEOLOGIST = "geologist"
+    FOODIE = "foodie"
+    STORYTELLER = "storyteller"
 
 
 class JobStatus(StrEnum):
@@ -41,7 +44,7 @@ class CreatePodcastJobRequest(BaseModel):
     personas: list[Persona] = Field(
         default=[Persona.PHOTOGRAPHER, Persona.HISTORIAN],
         min_length=1,
-        max_length=2,
+        max_length=5,
     )
 
 
