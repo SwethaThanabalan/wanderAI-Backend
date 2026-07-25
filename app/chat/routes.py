@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.api.dependencies import get_request_id
 from app.chat.models import ChatPersona, ChatRequest, ChatResponse
 from app.chat.service import chat_with_persona
+from app.chat.trip_builder import BuildTripRequest, build_trip_json
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -99,3 +100,75 @@ async def list_personas():
             },
         ]
     }
+
+
+@chat_router.post("/build-trip")
+async def build_trip(
+    request: BuildTripRequest,
+    request_id: str = Depends(get_request_id),
+):
+    """Build a complete wanderAI.trip JSON from accepted suggestions.
+
+    After the user has chatted with persona experts and accepted stops,
+    call this endpoint with all accepted stops to get the final trip
+    document in wanderAI.trip format, ready for import into the iOS app.
+
+    Example request:
+    ```json
+    {
+      "name": "Olympic Adventure",
+      "destination": "Olympic National Park",
+      "start_date": "2026-08-10",
+      "end_date": "2026-08-13",
+      "days_count": 3,
+      "travelers": 2,
+      "interests": ["hiking", "photography", "food"],
+      "accepted_stops": [
+        {
+          "name": "Hurricane Ridge",
+          "day": 1,
+          "sequence": 1,
+          "time": "06:00",
+          "duration_minutes": 180,
+          "category": "hiking",
+          "description": "Stunning alpine views with wildflower meadows",
+          "highlights": ["360-degree mountain views", "Wildflower meadows in August"],
+          "latitude": 47.9692,
+          "longitude": -123.4988
+        },
+        {
+          "name": "Lake Crescent Lodge",
+          "day": 1,
+          "sequence": 2,
+          "time": "12:30",
+          "duration_minutes": 90,
+          "category": "food",
+          "description": "Historic lodge restaurant on the lake",
+          "highlights": ["Fresh salmon", "Lakeside dining"],
+          "latitude": 48.0560,
+          "longitude": -123.7910
+        }
+      ]
+    }
+    ```
+
+    Returns a complete wanderAI.trip format JSON document.
+    """
+    logger.info(
+        "Building trip JSON",
+        extra={
+            "request_id": request_id,
+            "destination": request.destination,
+            "stops_count": len(request.accepted_stops),
+        },
+    )
+
+    try:
+        trip_json = build_trip_json(request)
+        return trip_json
+    except Exception as e:
+        logger.error("Trip build failed", extra={"error": str(e)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to build trip document.",
+        )

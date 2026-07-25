@@ -104,3 +104,102 @@ class TestChatEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["persona"] == "photographer"
+
+
+class TestBuildTrip:
+    """Tests for POST /v1/chat/build-trip."""
+
+    def test_build_trip_returns_wanderai_format(self, client):
+        """Should return a valid wanderAI.trip format document."""
+        response = client.post("/v1/chat/build-trip", json={
+            "name": "Olympic Adventure",
+            "destination": "Olympic National Park",
+            "start_date": "2026-08-10",
+            "end_date": "2026-08-13",
+            "days_count": 3,
+            "travelers": 2,
+            "interests": ["hiking", "photography"],
+            "accepted_stops": [
+                {
+                    "name": "Hurricane Ridge",
+                    "day": 1,
+                    "sequence": 1,
+                    "time": "06:00",
+                    "duration_minutes": 180,
+                    "category": "hiking",
+                    "latitude": 47.9692,
+                    "longitude": -123.4988,
+                },
+                {
+                    "name": "Lake Crescent",
+                    "day": 1,
+                    "sequence": 2,
+                    "time": "12:00",
+                    "category": "scenic",
+                },
+                {
+                    "name": "Hoh Rainforest",
+                    "day": 2,
+                    "sequence": 1,
+                    "time": "08:00",
+                    "duration_minutes": 240,
+                    "category": "hiking",
+                    "highlights": ["Hall of Mosses trail"],
+                },
+            ],
+        })
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify wanderAI.trip format
+        assert data["format"] == "wanderAI.trip"
+        assert data["formatVersion"] == "1.0.0"
+        assert "generatedAt" in data
+        assert "trip" in data
+
+        trip = data["trip"]
+        assert trip["name"] == "Olympic Adventure"
+        assert trip["primaryDestination"] == "Olympic National Park"
+        assert trip["startDate"] == "2026-08-10"
+        assert trip["endDate"] == "2026-08-13"
+        assert len(trip["days"]) == 3
+
+        # Day 1 should have 2 stops
+        day1 = trip["days"][0]
+        assert day1["dayNumber"] == 1
+        assert day1["date"] == "2026-08-10"
+        assert len(day1["stops"]) == 2
+        assert day1["stops"][0]["name"] == "Hurricane Ridge"
+        assert day1["stops"][0]["mapReference"]["latitude"] == 47.9692
+        assert day1["stops"][1]["name"] == "Lake Crescent"
+
+        # Day 2 should have 1 stop
+        day2 = trip["days"][1]
+        assert day2["dayNumber"] == 2
+        assert len(day2["stops"]) == 1
+        assert day2["stops"][0]["name"] == "Hoh Rainforest"
+        assert "Hall of Mosses trail" in day2["stops"][0]["highlights"]
+
+        # Day 3 should exist but be empty
+        day3 = trip["days"][2]
+        assert day3["dayNumber"] == 3
+        assert len(day3["stops"]) == 0
+
+    def test_build_trip_requires_stops(self, client):
+        """Should reject request with no accepted stops."""
+        response = client.post("/v1/chat/build-trip", json={
+            "name": "Empty Trip",
+            "destination": "Nowhere",
+            "accepted_stops": [],
+        })
+        assert response.status_code == 422
+
+    def test_build_trip_requires_name(self, client):
+        """Should reject request with empty name."""
+        response = client.post("/v1/chat/build-trip", json={
+            "name": "",
+            "destination": "Seattle",
+            "accepted_stops": [{"name": "Pike Place"}],
+        })
+        assert response.status_code == 422
