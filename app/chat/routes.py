@@ -3,8 +3,21 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.dependencies import get_request_id
-from app.chat.models import ChatPersona, ChatRequest, ChatResponse, MultiChatRequest, MultiChatResponse
+from app.chat.models import (
+    ChatPersona,
+    ChatRequest,
+    ChatResponse,
+    MultiChatRequest,
+    MultiChatResponse,
+    CreateSessionRequest,
+    CreateSessionResponse,
+    SessionMessageRequest,
+    SessionMessageResponse,
+    AcceptSuggestionRequest,
+    SessionInfoResponse,
+)
 from app.chat.service import chat_with_persona, chat_with_multiple_personas
+from app.chat.session_store import session_store
 from app.chat.trip_builder import BuildTripRequest, build_trip_json
 from app.core.logging import get_logger
 
@@ -137,6 +150,137 @@ async def list_personas():
             },
         ]
     }
+
+
+# --- Session-based endpoints ---
+
+
+@chat_router.post("/sessions", response_model=CreateSessionResponse)
+async def create_chat_session(
+    request: CreateSessionRequest,
+    request_id: str = Depends(get_request_id),
+):
+    """Create a new chat session. The server maintains history from here on."""
+    session = session_store.create_session(
+        personas=request.personas,
+        trip_context=request.trip_context,
+    )
+    return CreateSessionResponse(
+        session_id=session.session_id,
+        personas=session.personas,
+        trip_context=session.trip_context,
+    )
+
+
+@chat_router.post("/sessions/{session_id}/message", response_model=SessionMessageResponse)
+async def send_session_message(
+    session_id: str,
+    request: SessionMessageRequest,
+    request_id: str = Depends(get_request_id),
+):
+    """Send a message within a session. Server remembers everything."""
+    session = session_store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired.")
+
+    session.add_user_message(request.message)
+
+    from app.chat.models import MultiChatRequest
+    multi_request = MultiChatRequest(
+        message=request.message,
+        personas=session.personas,
+        trip_context=session.trip_context,
+        conversation_history=session.get_history(),
+    )
+
+    try:
+        response = await chat_with_multiple_personas(multi_request)
+        session.add_assistant_message(response.consolidated)
+        return SessionMessageResponse(
+            session_id=session_id,
+            consolidated=response.consolidated,
+            persona_replies=response.persona_replies,
+            all_suggestions=response.all_suggestions,
+            all_trip_updates=response.all_trip_updates,
+        )
+    except Exception as e:
+        logger.error("Session message failed", extra={"session_id": session_id, "error": str(e)})
+        raise HTTPException(status_code=500, detail="Chat service temporarily unavailable.")
+
+
+@chat_router.post("/sessions/{session_id}/accept")
+async def accept_suggestion(
+    session_id: str,
+    request: AcceptSuggestionRequest,
+    request_id: str = Depends(get_request_id),
+):
+    """Accept a suggestion. Updates trip context for future messages."""
+    session = session_store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired.")
+
+    stop_data = {
+        "name": request.stop_name,
+        "day": request.day,
+        "time": request.time,
+        "duration_minutes": request.duration_minutes,
+        "category": request.category,
+    }
+    session.accept_stop(stop_data)
+
+    return {
+        "status": "accepted",
+        "stop": stop_data,
+        "total_accepted": len(session.accepted_stops),
+        "current_stops": session.trip_context.existing_stops if session.trip_context else [],
+    }
+
+
+@chat_router.get("/sessions/{session_id}", response_model=SessionInfoResponse)
+async def get_session_info(session_id: str):
+    """Get current session state."""
+    session = session_store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired.")
+    return SessionInfoResponse(
+        session_id=session.session_id,
+        personas=[p.value for p in session.personas],
+        trip_context=session.trip_context,
+        message_count=len(session.messages),
+        accepted_stops=session.accepted_stops,
+    )
+
+
+@chat_router.post("/sessions/{session_id}/build-trip")
+async def build_trip_from_session(session_id: str):
+    """Build wanderAI.trip JSON from the session's accepted stops."""
+    session = session_store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired.")
+    if not session.accepted_stops:
+        raise HTTPException(status_code=400, detail="No stops accepted yet.")
+
+    from app.chat.trip_builder import AcceptedStop, BuildTripRequest
+    accepted = [AcceptedStop(**s) for s in session.accepted_stops]
+
+    build_request = BuildTripRequest(
+        name=f"Trip to {session.trip_context.destination}" if session.trip_context and session.trip_context.destination else "My Trip",
+        destination=session.trip_context.destination or "Unknown",
+        start_date=session.trip_context.start_date if session.trip_context else None,
+        end_date=session.trip_context.end_date if session.trip_context else None,
+        days_count=max(s.day for s in accepted),
+        travelers=session.trip_context.travelers if session.trip_context else None,
+        interests=session.trip_context.interests if session.trip_context else [],
+        accepted_stops=accepted,
+    )
+    return build_trip_json(build_request)
+
+
+@chat_router.delete("/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a chat session."""
+    session_store.delete_session(session_id)
+    return {"status": "deleted"}
 
 
 @chat_router.post("/build-trip")

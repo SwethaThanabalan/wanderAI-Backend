@@ -99,3 +99,57 @@ class MultiChatResponse(BaseModel):
     consolidated: str
     all_suggestions: list[str] = Field(default_factory=list)
     all_trip_updates: list[TripUpdate] = Field(default_factory=list)
+
+
+# --- Session-based models ---
+
+
+class CreateSessionRequest(BaseModel):
+    """Request to create a new chat session."""
+
+    personas: list[ChatPersona] = Field(min_length=1, max_length=6)
+    trip_context: TripContext | None = None
+
+
+class CreateSessionResponse(BaseModel):
+    """Response after creating a session."""
+
+    session_id: str
+    personas: list[ChatPersona]
+    trip_context: TripContext | None = None
+
+
+class SessionMessageRequest(BaseModel):
+    """Send a message within an existing session."""
+
+    message: str = Field(min_length=1, max_length=2000)
+
+
+class SessionMessageResponse(BaseModel):
+    """Response from a session message."""
+
+    session_id: str
+    consolidated: str
+    persona_replies: list[PersonaReply] = Field(default_factory=list)
+    all_suggestions: list[str] = Field(default_factory=list)
+    all_trip_updates: list[TripUpdate] = Field(default_factory=list)
+
+
+class AcceptSuggestionRequest(BaseModel):
+    """Accept a suggestion and add it to the session's trip plan."""
+
+    stop_name: str
+    day: int = 1
+    time: str | None = None
+    duration_minutes: int | None = None
+    category: str | None = None
+
+
+class SessionInfoResponse(BaseModel):
+    """Current session state."""
+
+    session_id: str
+    personas: list[str]
+    trip_context: TripContext | None = None
+    message_count: int
+    accepted_stops: list[dict] = Field(default_factory=list)
