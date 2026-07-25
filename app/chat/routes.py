@@ -202,6 +202,7 @@ async def send_session_message(
             persona_replies=response.persona_replies,
             all_suggestions=response.all_suggestions,
             all_trip_updates=response.all_trip_updates,
+            suggested_stops=response.suggested_stops,
         )
     except Exception as e:
         logger.error("Session message failed", extra={"session_id": session_id, "error": str(e)})

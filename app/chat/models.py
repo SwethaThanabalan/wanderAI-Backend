@@ -69,6 +69,7 @@ class ChatResponse(BaseModel):
     persona: ChatPersona
     suggestions: list[str] = Field(default_factory=list)
     trip_updates: list[TripUpdate] = Field(default_factory=list)
+    suggested_stops: list[dict] = Field(default_factory=list)
 
 
 # --- Multi-persona models ---
@@ -99,6 +100,7 @@ class MultiChatResponse(BaseModel):
     consolidated: str
     all_suggestions: list[str] = Field(default_factory=list)
     all_trip_updates: list[TripUpdate] = Field(default_factory=list)
+    suggested_stops: list[dict] = Field(default_factory=list)
 
 
 # --- Session-based models ---
@@ -133,6 +135,7 @@ class SessionMessageResponse(BaseModel):
     persona_replies: list[PersonaReply] = Field(default_factory=list)
     all_suggestions: list[str] = Field(default_factory=list)
     all_trip_updates: list[TripUpdate] = Field(default_factory=list)
+    suggested_stops: list[dict] = Field(default_factory=list)
 
 
 class AcceptSuggestionRequest(BaseModel):

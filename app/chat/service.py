@@ -32,19 +32,23 @@ CONVERSATION RULES:
 - Offer ONE idea at a time, not a list.
 - Be conversational — like texting a friend, not writing a travel guide.
 - DO NOT plan their whole trip in one message. Suggest one thing, ask if they like it.
-- Only include suggestions/trip_updates when the user has clearly accepted something.
 
-If the user accepts a suggestion, you can add:
+WHENEVER YOU MENTION A SPECIFIC PLACE, include a stops block at the end with full details:
 
-```suggestions
-["the accepted suggestion"]
+```stops
+[{"name": "Hurricane Ridge", "day": 1, "time": "06:00", "duration_minutes": 180, "category": "hiking", "description": "Alpine meadows with 360-degree mountain views", "latitude": 47.9692, "longitude": -123.4988, "highlights": ["Sunrise views", "Wildflower meadows"]}]
 ```
+
+ALWAYS include this with real coordinates when suggesting a named location.
+If just chatting without a specific place suggestion, skip it.
+
+If the user clearly ACCEPTS a suggestion, also add:
 
 ```trip_updates
-[{"action": "add_stop", "description": "...", "data": {"name": "...", "time": "...", "duration": "..."}}]
+[{"action": "add_stop", "description": "...", "data": {"name": "...", "time": "...", "duration_minutes": 120}}]
 ```
 
-Only add these when there's a clear YES from the user. Most replies are just conversation."""
+Only add trip_updates on a clear YES from the user."""
 
     # Add trip context if available
     context_section = ""
@@ -91,14 +95,25 @@ def _build_messages(
 
 
 def _parse_response(raw_text: str, persona: ChatPersona) -> ChatResponse:
-    """Parse the assistant reply, extracting suggestions and trip updates."""
+    """Parse the assistant reply, extracting suggestions, trip updates, and stops."""
     reply = raw_text
     suggestions: list[str] = []
     trip_updates: list[TripUpdate] = []
+    suggested_stops: list[dict] = []
+
+    # Extract stops block
+    if "```stops" in raw_text:
+        parts = raw_text.split("```stops")
+        reply = parts[0].strip()
+        try:
+            json_block = parts[1].split("```")[0].strip()
+            suggested_stops = json.loads(json_block)
+        except (json.JSONDecodeError, IndexError):
+            pass
 
     # Extract suggestions block
-    if "```suggestions" in raw_text:
-        parts = raw_text.split("```suggestions")
+    if "```suggestions" in reply:
+        parts = reply.split("```suggestions")
         reply = parts[0].strip()
         try:
             json_block = parts[1].split("```")[0].strip()
@@ -116,19 +131,13 @@ def _parse_response(raw_text: str, persona: ChatPersona) -> ChatResponse:
             trip_updates = [TripUpdate(**u) for u in updates_raw]
         except (json.JSONDecodeError, IndexError):
             pass
-    elif "```trip_updates" in raw_text:
-        try:
-            json_block = raw_text.split("```trip_updates")[1].split("```")[0].strip()
-            updates_raw = json.loads(json_block)
-            trip_updates = [TripUpdate(**u) for u in updates_raw]
-        except (json.JSONDecodeError, IndexError):
-            pass
 
     return ChatResponse(
         reply=reply,
         persona=persona,
         suggestions=suggestions,
         trip_updates=trip_updates,
+        suggested_stops=suggested_stops,
     )
 
 
@@ -211,7 +220,7 @@ async def chat_with_multiple_personas(request: "MultiChatRequest") -> "MultiChat
             output_text = "The crew is speechless for once. Try asking again?"
 
         # Parse the group conversation into individual persona replies
-        persona_replies, all_suggestions, all_trip_updates = _parse_group_conversation(
+        persona_replies, all_suggestions, all_trip_updates, suggested_stops = _parse_group_conversation(
             output_text, request.personas
         )
 
@@ -221,6 +230,7 @@ async def chat_with_multiple_personas(request: "MultiChatRequest") -> "MultiChat
                 "personas": persona_names,
                 "total_suggestions": len(all_suggestions),
                 "total_updates": len(all_trip_updates),
+                "suggested_stops": len(suggested_stops),
             },
         )
 
@@ -229,6 +239,7 @@ async def chat_with_multiple_personas(request: "MultiChatRequest") -> "MultiChat
             consolidated=output_text,
             all_suggestions=all_suggestions,
             all_trip_updates=all_trip_updates,
+            suggested_stops=suggested_stops,
         )
 
     except Exception as e:
@@ -314,22 +325,42 @@ FORMAT:
 [persona_name] Short message here.
 [persona_name] Short reaction + question to user.
 
-That's it. Two lines. Always end asking the user something.{context_section}"""
+That's it. Two lines. Always end asking the user something.
+
+WHENEVER YOU MENTION A SPECIFIC PLACE, you MUST include a stops block at the end:
+
+```stops
+[{{"name": "Hurricane Ridge", "day": 1, "time": "06:00", "duration_minutes": 180, "category": "hiking", "description": "Alpine meadows with 360-degree mountain views", "latitude": 47.9692, "longitude": -123.4988, "highlights": ["Sunrise views", "Wildflower meadows"]}}]
+```
+
+ALWAYS include this block if you suggest a specific named location. Include real coordinates.
+If you're just chatting without suggesting a specific place, skip the stops block.{context_section}"""
 
 
 def _parse_group_conversation(
     raw_text: str, personas: list["ChatPersona"]
-) -> tuple[list, list[str], list["TripUpdate"]]:
+) -> tuple[list, list[str], list["TripUpdate"], list[dict]]:
     """Parse the group conversation text into persona replies and extracted data."""
     from app.chat.models import PersonaReply
 
     suggestions: list[str] = []
     trip_updates: list[TripUpdate] = []
+    suggested_stops: list[dict] = []
     conversation_text = raw_text
 
+    # Extract stops block
+    if "```stops" in raw_text:
+        parts = raw_text.split("```stops")
+        conversation_text = parts[0].strip()
+        try:
+            json_block = parts[1].split("```")[0].strip()
+            suggested_stops = json.loads(json_block)
+        except (json.JSONDecodeError, IndexError):
+            pass
+
     # Extract suggestions block
-    if "```suggestions" in raw_text:
-        parts = raw_text.split("```suggestions")
+    if "```suggestions" in conversation_text:
+        parts = conversation_text.split("```suggestions")
         conversation_text = parts[0].strip()
         try:
             json_block = parts[1].split("```")[0].strip()
@@ -343,13 +374,6 @@ def _parse_group_conversation(
         conversation_text = parts[0].strip()
         try:
             json_block = parts[1].split("```")[0].strip()
-            updates_raw = json.loads(json_block)
-            trip_updates = [TripUpdate(**u) for u in updates_raw]
-        except (json.JSONDecodeError, IndexError):
-            pass
-    elif "```trip_updates" in raw_text:
-        try:
-            json_block = raw_text.split("```trip_updates")[1].split("```")[0].strip()
             updates_raw = json.loads(json_block)
             trip_updates = [TripUpdate(**u) for u in updates_raw]
         except (json.JSONDecodeError, IndexError):
@@ -372,11 +396,11 @@ def _parse_group_conversation(
         persona_replies.append(PersonaReply(
             persona=persona,
             reply=reply_text,
-            suggestions=[s for s in suggestions if persona.value in s.lower()] if suggestions else [],
+            suggestions=[],
             trip_updates=[],
         ))
 
-    return persona_replies, suggestions, trip_updates
+    return persona_replies, suggestions, trip_updates, suggested_stops
 
 
 async def _consolidate_replies(
