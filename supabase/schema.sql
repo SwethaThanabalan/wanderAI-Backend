@@ -137,3 +137,62 @@ create index if not exists podcast_episodes_user_id_idx
 
 create index if not exists podcast_episodes_trip_id_idx
     on public.podcast_episodes(trip_id);
+
+
+-- Chat Conversations: persists AI conversation state across sessions
+-- Allows the backend to retrieve context by conversation_id without
+-- requiring the client to resend everything.
+create table if not exists public.chat_conversations (
+    id uuid primary key default gen_random_uuid(),
+
+    user_id uuid references auth.users(id) on delete cascade,
+    trip_id uuid,
+    session_id text not null,
+
+    -- Active destination grounding
+    destination text,
+    state text,
+    country text,
+    region text,
+    current_stop_id text,
+    current_stop_name text,
+
+    -- Trip metadata
+    trip_name text,
+    trip_dates jsonb,          -- {"start": "ISO", "end": "ISO"}
+
+    -- Personas and preferences
+    selected_persona_ids jsonb not null default '[]'::jsonb,
+    traveler_preferences jsonb,
+    user_preferences jsonb,
+
+    -- Plan state
+    collected_places jsonb not null default '[]'::jsonb,
+    itinerary_summary jsonb not null default '[]'::jsonb,
+    current_plan jsonb not null default '[]'::jsonb,
+    accepted_stops jsonb not null default '[]'::jsonb,
+
+    -- Conversation history (trimmed to recent messages)
+    recent_messages jsonb not null default '[]'::jsonb,
+    message_count integer not null default 0,
+
+    -- Lifecycle
+    status text not null default 'active'
+        check (status in ('active', 'stale', 'archived')),
+    created_at timestamptz not null default now(),
+    last_active_at timestamptz not null default now()
+);
+
+-- Indexes for chat_conversations
+create index if not exists chat_conversations_user_id_idx
+    on public.chat_conversations(user_id);
+
+create index if not exists chat_conversations_trip_id_idx
+    on public.chat_conversations(trip_id);
+
+create index if not exists chat_conversations_session_id_idx
+    on public.chat_conversations(session_id);
+
+create index if not exists chat_conversations_status_idx
+    on public.chat_conversations(status)
+    where status = 'active';

@@ -3,6 +3,10 @@
 Each user message gets a single persona response (rotated round-robin).
 When the persona suggests a place, their data sources are searched to
 enrich the response with structured location cards for the UI.
+
+GROUNDING: The system prompt now includes explicit rules that anchor all
+follow-up questions to the active destination/trip context. The model will
+not silently switch destinations unless the user explicitly requests it.
 """
 
 import json
@@ -16,11 +20,14 @@ from app.chat.models import (
     ChatRequest,
     ChatResponse,
     ChatRole,
+    ContextUpdates,
+    ConversationContext,
     LocationCard,
     MultiChatRequest,
     MultiChatResponse,
     PersonaReply,
     PlanStop,
+    ResolvedContext,
     TripContext,
     TripUpdate,
     UserPreferences,
@@ -32,18 +39,109 @@ from app.services.openai_service import get_openai_client
 logger = get_logger(__name__)
 
 
+# --- Context Resolution ---
+
+
+def detect_destination_change(message: str, current_destination: str | None) -> str | None:
+    """Detect if the user is explicitly requesting a different destination.
+
+    Returns the new destination name if a switch is detected, else None.
+    Only triggers on clear, explicit requests like:
+    - "Show me photo spots in Boston"
+    - "Now plan for Tokyo"
+    - "Switch to Paris"
+    - "What about restaurants in NYC?"
+
+    Does NOT trigger on ambiguous follow-ups like:
+    - "Best photo spots" (stays in current destination)
+    - "What about sunrise?" (stays in current destination)
+    """
+    if not message:
+        return None
+
+    # Patterns that indicate explicit destination switch
+    switch_patterns = [
+        r"(?:show|find|suggest|recommend|plan|search|look)\s+(?:me\s+)?(?:\w+\s+)*(?:in|for|at|near)\s+(.+?)(?:\.|$|\?|!)",
+        r"(?:switch|change|move|go)\s+(?:to|over to)\s+(.+?)(?:\.|$|\?|!)",
+        r"(?:now|next)\s+(?:plan|do|show|find)\s+(?:for|in)\s+(.+?)(?:\.|$|\?|!)",
+        r"(?:what about|how about)\s+(?:\w+\s+)*(?:in|at|near)\s+(.+?)(?:\.|$|\?|!)",
+    ]
+
+    for pattern in switch_patterns:
+        match = re.search(pattern, message, re.IGNORECASE)
+        if match:
+            potential_destination = match.group(1).strip().rstrip("?.!")
+            # Only count as a switch if it's different from current
+            if current_destination and potential_destination.lower() != current_destination.lower():
+                # Basic sanity: must be at least 2 chars, not just a pronoun
+                if len(potential_destination) >= 2 and potential_destination.lower() not in (
+                    "here", "there", "this", "that", "it", "them", "the area",
+                    "nearby", "the region", "the park", "the city",
+                ):
+                    return potential_destination
+    return None
+
+
 def _build_system_prompt(
     persona: ChatPersona,
     trip_context: TripContext | None,
     current_plan: list[PlanStop] | None = None,
     user_preferences: UserPreferences | None = None,
+    conversation_context: ConversationContext | None = None,
 ) -> str:
-    """Build the full system prompt including persona character, trip context, and preferences."""
+    """Build the full system prompt with grounding rules, persona, trip context, and preferences."""
     config = PERSONA_CONFIGS.get(persona.value)
     if config:
         base_prompt = config.system_prompt
     else:
         base_prompt = PERSONA_PROMPTS.get(persona.value, PERSONA_PROMPTS["planner"])
+
+    # --- GROUNDING RULES (critical for context retention) ---
+    grounding_section = ""
+    if conversation_context and conversation_context.destination:
+        dest = conversation_context.destination
+        state = conversation_context.state or ""
+        country = conversation_context.country or ""
+        location_label = dest
+        if state:
+            location_label += f", {state}"
+        if country and country != state:
+            location_label += f", {country}"
+
+        stop_context = ""
+        if conversation_context.current_stop_name:
+            stop_context = f"\n- Current stop focus: {conversation_context.current_stop_name}"
+
+        places_context = ""
+        if conversation_context.collected_places:
+            places_list = ", ".join(conversation_context.collected_places[:10])
+            places_context = f"\n- Collected places: {places_list}"
+
+        grounding_section = f"""
+
+ACTIVE TRIP CONTEXT (THIS IS YOUR SOURCE OF TRUTH):
+- Destination: {location_label}
+- Trip: {conversation_context.trip_name or 'Unnamed trip'}{stop_context}{places_context}
+
+GROUNDING RULES — YOU MUST FOLLOW THESE:
+1. ALL suggestions, recommendations, and answers MUST be about {dest} unless the user EXPLICITLY names a different location.
+2. Short follow-up messages like "best photo spots", "what about sunrise?", "anything nearby?", "is this dog friendly?" refer to {dest} — NOT any other city or place.
+3. Do NOT silently switch to another destination. If a message is ambiguous, assume it's about {dest}.
+4. If the user EXPLICITLY asks about another location (e.g., "show me photo spots in Boston"), you may respond about that location, but note the destination change.
+5. Resolve pronouns ("this", "that", "here", "there") against {dest} and the current stop if one is set.
+6. Use the collected places and itinerary when answering to provide continuity.
+7. If destination context is completely missing, ask ONE concise clarifying question instead of guessing.
+8. NEVER infer a destination from your training data when structured context exists."""
+    elif not (trip_context and trip_context.destination):
+        # No destination at all — add a rule to ask
+        grounding_section = """
+
+GROUNDING RULES:
+- The user has NOT specified a destination yet.
+- If they ask a location-specific question (e.g., "best photo spots"), ask them to specify where.
+- Do NOT guess a destination from your training data.
+- Ask ONE concise clarifying question: "Which destination are you thinking about?"
+"""
 
     # Add response format instructions for structured data extraction
     format_instructions = """
@@ -132,7 +230,7 @@ Only add trip_updates on a clear YES from the user. Don't assume acceptance."""
             plan_section = "\n\nCURRENT TRIP PLAN (what's already scheduled):\n" + "\n".join(plan_lines)
             plan_section += "\n\nBe aware of this plan. Don't suggest things that conflict with existing timing. Build ON this plan, suggest additions or improvements."
 
-    return base_prompt + format_instructions + preferences_section + context_section + plan_section
+    return base_prompt + grounding_section + format_instructions + preferences_section + context_section + plan_section
 
 
 def _build_messages(
@@ -341,6 +439,7 @@ async def chat_single_persona(
     last_responding_persona: ChatPersona | None = None,
     last_persona_reply: str | None = None,
     all_personas: list[ChatPersona] | None = None,
+    conversation_context: ConversationContext | None = None,
 ) -> tuple[str, list[LocationCard], list[TripUpdate]]:
     """Core single-persona chat function used by session-based endpoints.
 
@@ -348,12 +447,14 @@ async def chat_single_persona(
     to react to what the previous persona said — creating a back-and-forth
     group conversation, one message at a time.
 
+    conversation_context provides grounding rules to prevent destination drift.
+
     Returns (reply_text, location_cards, trip_updates).
     """
     client = get_openai_client()
 
     system_prompt = _build_system_prompt(
-        persona, trip_context, current_plan, user_preferences
+        persona, trip_context, current_plan, user_preferences, conversation_context
     )
 
     # Add group conversation context so personas talk to each other

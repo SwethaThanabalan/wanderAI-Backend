@@ -8,16 +8,19 @@ from app.chat.models import (
     ChatPersona,
     ChatRequest,
     ChatResponse,
+    ContextUpdates,
+    ConversationContext,
     CreateSessionRequest,
     CreateSessionResponse,
     MultiChatRequest,
     MultiChatResponse,
+    ResolvedContext,
     SessionInfoResponse,
     SessionMessageRequest,
     SessionMessageResponse,
 )
 from app.chat.personas import PERSONA_CONFIGS
-from app.chat.service import chat_single_persona, chat_with_multiple_personas, chat_with_persona
+from app.chat.service import chat_single_persona, chat_with_multiple_personas, chat_with_persona, detect_destination_change
 from app.chat.session_store import session_store
 from app.chat.trip_builder import BuildTripRequest, build_trip_json
 from app.core.logging import get_logger
@@ -144,7 +147,7 @@ async def create_chat_session(
     request: CreateSessionRequest,
     request_id: str = Depends(get_request_id),
 ):
-    """Create a new chat session with personas, trip context, current plan, and user preferences.
+    """Create a new chat session with full conversation context.
 
     The server maintains conversation history from here on. Each message
     will get a response from ONE persona (rotated round-robin).
@@ -154,14 +157,26 @@ async def create_chat_session(
     - trip_context: destination, dates, travelers info
     - current_plan: the user's existing trip plan (stops already scheduled)
     - user_preferences: travel style, dietary needs, pace, budget, etc.
+    - context: structured ConversationContext for grounding (destination, state, trip, stops)
 
-    The personas will learn from these preferences and tailor their suggestions.
+    The context anchors all follow-up questions to the active destination.
     """
+    # Validate persona IDs in context match available personas
+    if request.context and request.context.selected_persona_ids:
+        valid_ids = {p.value for p in ChatPersona}
+        invalid = [p for p in request.context.selected_persona_ids if p not in valid_ids]
+        if invalid:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid persona IDs in context: {invalid}",
+            )
+
     session = session_store.create_session(
         personas=request.personas,
         trip_context=request.trip_context,
         current_plan=request.current_plan,
         user_preferences=request.user_preferences,
+        conversation_context=request.context,
     )
 
     logger.info(
@@ -169,7 +184,9 @@ async def create_chat_session(
         extra={
             "request_id": request_id,
             "session_id": session.session_id,
+            "conversation_id": session.conversation_id,
             "personas": [p.value for p in request.personas],
+            "destination": session.conversation_context.destination,
             "has_preferences": request.user_preferences is not None,
             "plan_stops": len(request.current_plan),
         },
@@ -177,10 +194,12 @@ async def create_chat_session(
 
     return CreateSessionResponse(
         session_id=session.session_id,
+        conversation_id=session.conversation_id,
         personas=session.personas,
         trip_context=session.trip_context,
         current_plan=session.current_plan,
         user_preferences=session.user_preferences,
+        resolved_context=session.get_resolved_context(),
     )
 
 
@@ -196,15 +215,34 @@ async def send_session_message(
     experts throughout the conversation. Each persona responds in their
     unique character with emojis and personality.
 
+    Context grounding ensures follow-up questions stay anchored to the
+    active destination. If the user explicitly requests a new destination,
+    the context is updated and returned in contextUpdates.
+
     Response includes:
     - persona: which persona responded this time
     - reply: the persona's expressive response
     - suggested_stops: LocationCard objects for any places mentioned (for UI cards)
     - trip_updates: structured changes if the user accepted something
+    - resolved_context: current destination/stop/persona state
+    - context_updates: flags for what changed (destination_changed, etc.)
     """
     session = session_store.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found or expired.")
+
+    # If client sends updated context, merge it
+    context_updates = ContextUpdates()
+    if request.context:
+        context_updates = session.update_context_from_client(request.context)
+
+    # Detect if the user is explicitly switching destinations
+    new_dest = detect_destination_change(
+        request.message, session.conversation_context.destination
+    )
+    if new_dest:
+        dest_updates = session.update_destination(new_dest)
+        context_updates.destination_changed = dest_updates.destination_changed
 
     # Add user message to history
     session.add_user_message(request.message)
@@ -223,6 +261,7 @@ async def send_session_message(
             last_responding_persona=session.last_responding_persona,
             last_persona_reply=session.last_persona_reply,
             all_personas=session.personas,
+            conversation_context=session.conversation_context,
         )
 
         # Store the assistant response and track for next persona's context
@@ -231,10 +270,14 @@ async def send_session_message(
 
         return SessionMessageResponse(
             session_id=session_id,
+            conversation_id=session.conversation_id,
             persona=persona,
             reply=reply,
             suggested_stops=location_cards,
             trip_updates=trip_updates,
+            resolved_context=session.get_resolved_context(),
+            context_updates=context_updates,
+            recommendations=location_cards,
         )
 
     except Exception as e:
@@ -276,16 +319,18 @@ async def accept_suggestion(
 
 @chat_router.get("/sessions/{session_id}", response_model=SessionInfoResponse)
 async def get_session_info(session_id: str):
-    """Get current session state including plan, preferences, and next persona."""
+    """Get current session state including plan, preferences, context, and next persona."""
     session = session_store.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found or expired.")
     return SessionInfoResponse(
         session_id=session.session_id,
+        conversation_id=session.conversation_id,
         personas=[p.value for p in session.personas],
         trip_context=session.trip_context,
         current_plan=session.current_plan,
         user_preferences=session.user_preferences,
+        resolved_context=session.get_resolved_context(),
         message_count=len(session.messages),
         accepted_stops=session.accepted_stops,
     )
