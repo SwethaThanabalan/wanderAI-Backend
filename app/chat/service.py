@@ -174,3 +174,153 @@ async def chat_with_persona(request: ChatRequest) -> ChatResponse:
     except Exception as e:
         logger.error("Chat service failed", extra={"error": str(e), "persona": request.persona.value})
         raise
+
+
+async def chat_with_multiple_personas(request: "MultiChatRequest") -> "MultiChatResponse":
+    """Query multiple personas in parallel, then consolidate their responses.
+
+    Each persona answers independently, then a consolidation pass merges
+    their suggestions into a unified recommendation.
+    """
+    import asyncio
+
+    from app.chat.models import MultiChatRequest, MultiChatResponse, PersonaReply
+
+    client = get_openai_client()
+
+    # Run all personas in parallel
+    async def _get_persona_reply(persona: ChatPersona) -> PersonaReply:
+        system_prompt = _build_system_prompt(persona, request.trip_context)
+        messages = _build_messages(system_prompt, request.conversation_history, request.message)
+
+        response = await client.responses.create(
+            model="gpt-4o",
+            input=messages,
+        )
+
+        output_text = ""
+        for item in response.output:
+            if hasattr(item, "content"):
+                for content_block in item.content:
+                    if hasattr(content_block, "text"):
+                        output_text += content_block.text
+
+        if not output_text:
+            output_text = "No response generated."
+
+        parsed = _parse_response(output_text, persona)
+
+        return PersonaReply(
+            persona=persona,
+            reply=parsed.reply,
+            suggestions=parsed.suggestions,
+            trip_updates=parsed.trip_updates,
+        )
+
+    # Execute all persona queries in parallel
+    tasks = [_get_persona_reply(p) for p in request.personas]
+    persona_replies = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Filter out errors
+    successful_replies: list[PersonaReply] = []
+    for reply in persona_replies:
+        if isinstance(reply, PersonaReply):
+            successful_replies.append(reply)
+        else:
+            logger.warning("Persona reply failed", extra={"error": str(reply)})
+
+    # Merge all suggestions and trip updates
+    all_suggestions: list[str] = []
+    all_trip_updates: list[TripUpdate] = []
+    for reply in successful_replies:
+        all_suggestions.extend(reply.suggestions)
+        all_trip_updates.extend(reply.trip_updates)
+
+    # Consolidation pass — merge all persona perspectives into one summary
+    consolidated = await _consolidate_replies(
+        user_message=request.message,
+        persona_replies=successful_replies,
+        trip_context=request.trip_context,
+    )
+
+    logger.info(
+        "Multi-persona chat completed",
+        extra={
+            "personas_queried": len(request.personas),
+            "personas_succeeded": len(successful_replies),
+            "total_suggestions": len(all_suggestions),
+            "total_updates": len(all_trip_updates),
+        },
+    )
+
+    return MultiChatResponse(
+        persona_replies=successful_replies,
+        consolidated=consolidated,
+        all_suggestions=all_suggestions,
+        all_trip_updates=all_trip_updates,
+    )
+
+
+async def _consolidate_replies(
+    user_message: str,
+    persona_replies: list,
+    trip_context: "TripContext | None",
+) -> str:
+    """Use the LLM to merge multiple persona perspectives into one cohesive answer."""
+    client = get_openai_client()
+
+    # Build a summary of each persona's take
+    persona_summaries = []
+    for reply in persona_replies:
+        persona_summaries.append(
+            f"**{reply.persona.value.upper()}** says:\n{reply.reply}"
+        )
+
+    combined_input = "\n\n---\n\n".join(persona_summaries)
+
+    consolidation_prompt = """\
+You are the WanderAI Trip Consolidator. Multiple travel experts just gave their \
+perspectives on a traveler's question. Your job is to weave their answers into ONE \
+cohesive, fun, actionable response.
+
+RULES:
+- Combine the best insights from each expert into a flowing narrative
+- Highlight where experts AGREE (strong recommendations)
+- Note where they DISAGREE and let the user decide
+- Keep each expert's personality flavor in brief attribution ("The Foodie insists...", "Our Geologist points out...")
+- Be concise but complete — don't repeat everything, synthesize
+- End with a clear priority order if there are many suggestions
+- Keep the tone fun, warm, and actionable
+
+Do NOT just list each persona's answer sequentially. WEAVE them together."""
+
+    context_note = ""
+    if trip_context and trip_context.destination:
+        context_note = f"\n\nTrip: {trip_context.destination}"
+        if trip_context.start_date:
+            context_note += f" ({trip_context.start_date} to {trip_context.end_date or '...'})"
+
+    messages = [
+        {"role": "system", "content": consolidation_prompt},
+        {"role": "user", "content": f"The traveler asked: \"{user_message}\"{context_note}\n\nHere's what each expert said:\n\n{combined_input}"},
+    ]
+
+    try:
+        response = await client.responses.create(
+            model="gpt-4o",
+            input=messages,
+        )
+
+        output_text = ""
+        for item in response.output:
+            if hasattr(item, "content"):
+                for content_block in item.content:
+                    if hasattr(content_block, "text"):
+                        output_text += content_block.text
+
+        return output_text or "Here's what the team thinks — check each persona's reply above for details."
+
+    except Exception as e:
+        logger.warning("Consolidation failed, returning fallback", extra={"error": str(e)})
+        # Fallback: simple concatenation
+        return "Here's what each expert recommends — see their individual replies for the full picture."

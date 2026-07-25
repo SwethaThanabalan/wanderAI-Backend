@@ -69,3 +69,33 @@ class ChatResponse(BaseModel):
     persona: ChatPersona
     suggestions: list[str] = Field(default_factory=list)
     trip_updates: list[TripUpdate] = Field(default_factory=list)
+
+
+# --- Multi-persona models ---
+
+
+class MultiChatRequest(BaseModel):
+    """Request body for POST /v1/chat/multi — query multiple personas at once."""
+
+    message: str = Field(min_length=1, max_length=2000)
+    personas: list[ChatPersona] = Field(min_length=1, max_length=6)
+    trip_context: TripContext | None = None
+    conversation_history: list[ChatMessage] = Field(default_factory=list, max_length=50)
+
+
+class PersonaReply(BaseModel):
+    """One persona's individual response."""
+
+    persona: ChatPersona
+    reply: str
+    suggestions: list[str] = Field(default_factory=list)
+    trip_updates: list[TripUpdate] = Field(default_factory=list)
+
+
+class MultiChatResponse(BaseModel):
+    """Response from multi-persona chat — each persona's take + consolidated result."""
+
+    persona_replies: list[PersonaReply]
+    consolidated: str
+    all_suggestions: list[str] = Field(default_factory=list)
+    all_trip_updates: list[TripUpdate] = Field(default_factory=list)

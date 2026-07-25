@@ -3,8 +3,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.dependencies import get_request_id
-from app.chat.models import ChatPersona, ChatRequest, ChatResponse
-from app.chat.service import chat_with_persona
+from app.chat.models import ChatPersona, ChatRequest, ChatResponse, MultiChatRequest, MultiChatResponse
+from app.chat.service import chat_with_persona, chat_with_multiple_personas
 from app.chat.trip_builder import BuildTripRequest, build_trip_json
 from app.core.logging import get_logger
 
@@ -51,6 +51,43 @@ async def send_chat_message(
         return response
     except Exception as e:
         logger.error("Chat failed", extra={"error": str(e), "persona": request.persona.value})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Chat service temporarily unavailable.",
+        )
+
+
+@chat_router.post("/multi", response_model=MultiChatResponse)
+async def send_multi_persona_message(
+    request: MultiChatRequest,
+    request_id: str = Depends(get_request_id),
+):
+    """Chat with multiple persona experts at once.
+
+    Sends the same message to all selected personas in parallel.
+    Each persona gives their unique take, then the responses are
+    consolidated into one cohesive recommendation.
+
+    Response includes:
+    - persona_replies: Each persona's individual response
+    - consolidated: A merged, synthesized summary of all perspectives
+    - all_suggestions: Combined suggestions from all personas
+    - all_trip_updates: Combined trip modifications from all personas
+    """
+    logger.info(
+        "Multi-persona chat received",
+        extra={
+            "request_id": request_id,
+            "personas": [p.value for p in request.personas],
+            "has_trip_context": request.trip_context is not None,
+        },
+    )
+
+    try:
+        response = await chat_with_multiple_personas(request)
+        return response
+    except Exception as e:
+        logger.error("Multi-persona chat failed", extra={"error": str(e)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Chat service temporarily unavailable.",
