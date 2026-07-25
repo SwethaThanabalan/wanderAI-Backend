@@ -287,27 +287,33 @@ class TestContextDetection:
         """Short follow-ups should NOT trigger a switch."""
         from app.chat.service import detect_destination_change
 
-        assert detect_destination_change("Best photo spots", "North Cascades") is None
-        assert detect_destination_change("What about sunrise?", "North Cascades") is None
-        assert detect_destination_change("Anything nearby?", "North Cascades") is None
-        assert detect_destination_change("Is this dog friendly?", "North Cascades") is None
-        assert detect_destination_change("How long does that take?", "North Cascades") is None
-        assert detect_destination_change("Add the second one", "North Cascades") is None
+        assert detect_destination_change("Best photo spots", "North Cascades", "Washington") is None
+        assert detect_destination_change("What about sunrise?", "North Cascades", "Washington") is None
+        assert detect_destination_change("Anything nearby?", "North Cascades", "Washington") is None
+        assert detect_destination_change("Is this dog friendly?", "North Cascades", "Washington") is None
+        assert detect_destination_change("How long does that take?", "North Cascades", "Washington") is None
+        assert detect_destination_change("Add the second one", "North Cascades", "Washington") is None
 
     def test_explicit_switch_detected(self):
         """Explicit destination mentions should trigger a switch."""
         from app.chat.service import detect_destination_change
 
-        assert detect_destination_change("Show me photo spots in Boston", "North Cascades") == "Boston"
-        assert detect_destination_change("Find restaurants in Tokyo", "North Cascades") == "Tokyo"
-        assert detect_destination_change("Now plan for Paris", "North Cascades") == "Paris"
-        assert detect_destination_change("Switch to Yellowstone", "North Cascades") == "Yellowstone"
+        assert detect_destination_change("Show me photo spots in Boston", "North Cascades", "Washington") == "Boston"
+        assert detect_destination_change("Find restaurants in Tokyo", "North Cascades", "Washington") == "Tokyo"
+        assert detect_destination_change("Switch to Yellowstone", "North Cascades", "Washington") == "Yellowstone"
 
     def test_same_destination_no_switch(self):
         """Mentioning the current destination should NOT trigger a switch."""
         from app.chat.service import detect_destination_change
 
-        assert detect_destination_change("Show me photo spots in North Cascades", "North Cascades") is None
+        assert detect_destination_change("Show me photo spots in North Cascades", "North Cascades", "Washington") is None
+
+    def test_state_mention_no_switch(self):
+        """Mentioning the current state should NOT trigger a switch."""
+        from app.chat.service import detect_destination_change
+
+        assert detect_destination_change("Create a 3-day plan for North Cascades in Washington", "North Cascades National Park", "Washington") is None
+        assert detect_destination_change("Plan for North Cascades in Washington", "North Cascades National Park", "Washington") is None
 
     def test_no_destination_set(self):
         """With no current destination, nothing should switch."""

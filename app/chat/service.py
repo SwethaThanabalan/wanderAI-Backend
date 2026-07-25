@@ -42,7 +42,7 @@ logger = get_logger(__name__)
 # --- Context Resolution ---
 
 
-def detect_destination_change(message: str, current_destination: str | None) -> str | None:
+def detect_destination_change(message: str, current_destination: str | None, current_state: str | None = None) -> str | None:
     """Detect if the user is explicitly requesting a different destination.
 
     Returns the new destination name if a switch is detected, else None.
@@ -55,30 +55,60 @@ def detect_destination_change(message: str, current_destination: str | None) -> 
     Does NOT trigger on ambiguous follow-ups like:
     - "Best photo spots" (stays in current destination)
     - "What about sunrise?" (stays in current destination)
+    - "Create a plan for North Cascades in Washington" (Washington is the state, not a switch)
     """
     if not message:
         return None
 
     # Patterns that indicate explicit destination switch
     switch_patterns = [
-        r"(?:show|find|suggest|recommend|plan|search|look)\s+(?:me\s+)?(?:\w+\s+)*(?:in|for|at|near)\s+(.+?)(?:\.|$|\?|!)",
+        r"(?:show|find|suggest|recommend|search|look)\s+(?:me\s+)?(?:\w+\s+)*(?:in|for|at|near)\s+(.+?)(?:\.|$|\?|!)",
         r"(?:switch|change|move|go)\s+(?:to|over to)\s+(.+?)(?:\.|$|\?|!)",
         r"(?:now|next)\s+(?:plan|do|show|find)\s+(?:for|in)\s+(.+?)(?:\.|$|\?|!)",
         r"(?:what about|how about)\s+(?:\w+\s+)*(?:in|at|near)\s+(.+?)(?:\.|$|\?|!)",
     ]
 
+    # Build a set of strings that are NOT new destinations (current location terms)
+    known_location_terms: set[str] = set()
+    if current_destination:
+        known_location_terms.add(current_destination.lower())
+        # Also add individual words from the destination (e.g., "North Cascades" -> "north", "cascades")
+        for word in current_destination.lower().split():
+            if len(word) > 3:  # skip short words like "the", "of"
+                known_location_terms.add(word)
+    if current_state:
+        known_location_terms.add(current_state.lower())
+
     for pattern in switch_patterns:
         match = re.search(pattern, message, re.IGNORECASE)
         if match:
             potential_destination = match.group(1).strip().rstrip("?.!")
+            potential_lower = potential_destination.lower()
+
+            # Skip if it matches the current destination or state
+            if potential_lower in known_location_terms:
+                continue
+
+            # Skip if the current destination contains this text (e.g., "Washington" within context of "North Cascades, Washington")
+            if current_destination and potential_lower in current_destination.lower():
+                continue
+
+            # Skip if it's clearly just a region/state qualifier of the current destination
+            if current_state and potential_lower == current_state.lower():
+                continue
+
             # Only count as a switch if it's different from current
-            if current_destination and potential_destination.lower() != current_destination.lower():
+            if current_destination and potential_lower != current_destination.lower():
                 # Basic sanity: must be at least 2 chars, not just a pronoun
-                if len(potential_destination) >= 2 and potential_destination.lower() not in (
+                if len(potential_destination) >= 2 and potential_lower not in (
                     "here", "there", "this", "that", "it", "them", "the area",
                     "nearby", "the region", "the park", "the city",
                 ):
                     return potential_destination
+            elif not current_destination:
+                # No current destination — this isn't a "switch", it's setting one
+                continue
+
     return None
 
 

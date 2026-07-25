@@ -238,7 +238,9 @@ async def send_session_message(
 
     # Detect if the user is explicitly switching destinations
     new_dest = detect_destination_change(
-        request.message, session.conversation_context.destination
+        request.message,
+        session.conversation_context.destination,
+        current_state=session.conversation_context.state,
     )
     if new_dest:
         dest_updates = session.update_destination(new_dest)
