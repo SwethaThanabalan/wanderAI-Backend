@@ -220,10 +220,14 @@ async def send_session_message(
             trip_context=session.trip_context,
             current_plan=session.current_plan,
             user_preferences=session.user_preferences,
+            last_responding_persona=session.last_responding_persona,
+            last_persona_reply=session.last_persona_reply,
+            all_personas=session.personas,
         )
 
-        # Store the assistant response in session history
+        # Store the assistant response and track for next persona's context
         session.add_assistant_message(reply, persona=persona)
+        session.record_persona_response(persona, reply)
 
         return SessionMessageResponse(
             session_id=session_id,
@@ -310,6 +314,63 @@ async def build_trip_from_session(session_id: str):
         accepted_stops=accepted,
     )
     return build_trip_json(build_request)
+
+
+@chat_router.post("/sessions/{session_id}/generate-plan")
+async def generate_plan_from_session(
+    session_id: str,
+    request_id: str = Depends(get_request_id),
+):
+    """Generate a full, detailed trip plan from the session's accepted stops.
+
+    Unlike /build-trip (which just formats accepted stops into the trip schema),
+    this endpoint:
+    1. Organizes stops by geographic proximity into optimal day groups
+    2. Fetches detailed information for each stop (descriptions, history, tips)
+    3. Fetches high-quality images for each location
+    4. Estimates driving times and distances between stops
+    5. Generates day titles and summaries
+    6. Produces a complete wanderAI.trip document with full detail
+
+    This is the "finalize my trip" endpoint — call it when the user is done
+    chatting and wants their complete, polished trip plan.
+    """
+    session = session_store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired.")
+    if not session.accepted_stops:
+        raise HTTPException(status_code=400, detail="No stops accepted yet. Accept some suggestions first.")
+
+    from app.chat.trip_planner import generate_trip_plan
+
+    try:
+        trip_document = await generate_trip_plan(
+            accepted_stops=session.accepted_stops,
+            trip_context=session.trip_context,
+            current_plan=session.current_plan,
+            user_preferences=session.user_preferences,
+        )
+
+        logger.info(
+            "Trip plan generated from session",
+            extra={
+                "request_id": request_id,
+                "session_id": session_id,
+                "stops_count": len(session.accepted_stops),
+            },
+        )
+
+        return trip_document
+
+    except Exception as e:
+        logger.error(
+            "Trip plan generation failed",
+            extra={"session_id": session_id, "error": str(e)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Trip plan generation failed. Please try again.",
+        )
 
 
 @chat_router.delete("/sessions/{session_id}")

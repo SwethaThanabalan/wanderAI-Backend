@@ -338,8 +338,15 @@ async def chat_single_persona(
     trip_context: TripContext | None = None,
     current_plan: list[PlanStop] | None = None,
     user_preferences: UserPreferences | None = None,
+    last_responding_persona: ChatPersona | None = None,
+    last_persona_reply: str | None = None,
+    all_personas: list[ChatPersona] | None = None,
 ) -> tuple[str, list[LocationCard], list[TripUpdate]]:
     """Core single-persona chat function used by session-based endpoints.
+
+    When last_responding_persona is provided, the current persona is prompted
+    to react to what the previous persona said — creating a back-and-forth
+    group conversation, one message at a time.
 
     Returns (reply_text, location_cards, trip_updates).
     """
@@ -348,7 +355,30 @@ async def chat_single_persona(
     system_prompt = _build_system_prompt(
         persona, trip_context, current_plan, user_preferences
     )
-    messages = _build_messages(system_prompt, conversation_history, message)
+
+    # Add group conversation context so personas talk to each other
+    if all_personas and len(all_personas) > 1:
+        other_personas = []
+        for p in all_personas:
+            if p != persona:
+                config = PERSONA_CONFIGS.get(p.value)
+                if config:
+                    other_personas.append(f"{config.emoji} {config.display_name}")
+        if other_personas:
+            system_prompt += f"\n\nGROUP CHAT CONTEXT:\nYou're in a group chat with: {', '.join(other_personas)} and the user."
+            system_prompt += "\nYou take turns responding. React to what others said — agree, disagree, riff on their ideas, tease them, or add your perspective. This is a conversation, not isolated answers."
+
+    # If another persona spoke before, include that as context in the user message
+    effective_message = message
+    if last_responding_persona and last_persona_reply and last_responding_persona != persona:
+        prev_config = PERSONA_CONFIGS.get(last_responding_persona.value)
+        prev_name = prev_config.display_name if prev_config else last_responding_persona.value
+        effective_message = (
+            f"[{prev_name} just said]: {last_persona_reply}\n\n"
+            f"[User]: {message}"
+        )
+
+    messages = _build_messages(system_prompt, conversation_history, effective_message)
 
     try:
         response = await client.responses.create(

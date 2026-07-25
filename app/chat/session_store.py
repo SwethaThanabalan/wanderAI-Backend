@@ -55,12 +55,14 @@ class ChatSession:
 
         # Persona rotation: track which persona responds next
         self._persona_index = 0
+        self.last_responding_persona: ChatPersona | None = None
+        self.last_persona_reply: str | None = None
 
     def get_next_persona(self) -> ChatPersona:
         """Get the next persona in the rotation.
 
         Round-robin through the session's active personas so each message
-        comes from a different character.
+        comes from a different character, creating a back-and-forth conversation.
         """
         persona = self.personas[self._persona_index]
         self._persona_index = (self._persona_index + 1) % len(self.personas)
@@ -69,6 +71,14 @@ class ChatSession:
     def peek_next_persona(self) -> ChatPersona:
         """See which persona is up next without advancing the rotation."""
         return self.personas[self._persona_index]
+
+    def record_persona_response(self, persona: ChatPersona, reply: str) -> None:
+        """Track which persona last responded and what they said.
+
+        This allows the next persona to react to/build on the previous one.
+        """
+        self.last_responding_persona = persona
+        self.last_persona_reply = reply
 
     def add_user_message(self, content: str) -> None:
         self.messages.append(ChatMessage(role=ChatRole.USER, content=content))
