@@ -1,56 +1,101 @@
-"""Chat service for trip planning with persona experts."""
+"""Chat service for trip planning with persona experts.
+
+Each user message gets a single persona response (rotated round-robin).
+When the persona suggests a place, their data sources are searched to
+enrich the response with structured location cards for the UI.
+"""
 
 import json
+import re
 from typing import Any
 
+from app.chat.data_sources import enrich_location_cards
 from app.chat.models import (
     ChatMessage,
     ChatPersona,
     ChatRequest,
     ChatResponse,
     ChatRole,
+    LocationCard,
+    MultiChatRequest,
+    MultiChatResponse,
+    PersonaReply,
+    PlanStop,
     TripContext,
     TripUpdate,
+    UserPreferences,
 )
-from app.chat.personas import PERSONA_PROMPTS
+from app.chat.personas import PERSONA_CONFIGS, PERSONA_PROMPTS
 from app.core.logging import get_logger
 from app.services.openai_service import get_openai_client
 
 logger = get_logger(__name__)
 
 
-def _build_system_prompt(persona: ChatPersona, trip_context: TripContext | None) -> str:
-    """Build the full system prompt including persona and trip context."""
-    base_prompt = PERSONA_PROMPTS.get(persona.value, PERSONA_PROMPTS["planner"])
+def _build_system_prompt(
+    persona: ChatPersona,
+    trip_context: TripContext | None,
+    current_plan: list[PlanStop] | None = None,
+    user_preferences: UserPreferences | None = None,
+) -> str:
+    """Build the full system prompt including persona character, trip context, and preferences."""
+    config = PERSONA_CONFIGS.get(persona.value)
+    if config:
+        base_prompt = config.system_prompt
+    else:
+        base_prompt = PERSONA_PROMPTS.get(persona.value, PERSONA_PROMPTS["planner"])
 
-    # Add response format instructions
+    # Add response format instructions for structured data extraction
     format_instructions = """
 
-CONVERSATION RULES:
-- Keep responses SHORT. 2-4 sentences max.
-- Always end with a question to the user.
-- Offer ONE idea at a time, not a list.
-- Be conversational — like texting a friend, not writing a travel guide.
-- DO NOT plan their whole trip in one message. Suggest one thing, ask if they like it.
+LOCATION SUGGESTIONS:
+Whenever you mention or suggest a SPECIFIC named place (restaurant, viewpoint, trail, museum, etc.),
+include a location block at the end of your message with the details:
 
-WHENEVER YOU MENTION A SPECIFIC PLACE, include a stops block at the end with full details:
-
-```stops
-[{"name": "Hurricane Ridge", "day": 1, "time": "06:00", "duration_minutes": 180, "category": "hiking", "description": "Alpine meadows with 360-degree mountain views", "latitude": 47.9692, "longitude": -123.4988, "highlights": ["Sunrise views", "Wildflower meadows"]}]
+```locations
+[{"name": "Place Name", "description": "Your take on why this place is amazing", "category": "dining|hiking|viewpoint|museum|landmark|nature|nightlife|market|beach|park|historic_site|other", "day": 1, "time": "14:00", "duration_minutes": 90, "highlights": ["highlight 1", "highlight 2", "highlight 3"]}]
 ```
 
-ALWAYS include this with real coordinates when suggesting a named location.
-If just chatting without a specific place suggestion, skip it.
+Include as many locations as you mention. The app will render these as cards.
+You don't need coordinates — we'll look those up. But DO include your description, category, and highlights.
 
-If the user clearly ACCEPTS a suggestion, also add:
+If the user clearly ACCEPTS a suggestion (says yes, let's do it, add that, etc.), also add:
 
 ```trip_updates
-[{"action": "add_stop", "description": "...", "data": {"name": "...", "time": "...", "duration_minutes": 120}}]
+[{"action": "add_stop", "description": "Adding [place] to day [N]", "data": {"name": "...", "day": 1, "time": "...", "duration_minutes": 90}}]
 ```
 
-Only add trip_updates on a clear YES from the user."""
+Only add trip_updates on a clear YES from the user. Don't assume acceptance."""
 
-    # Add trip context if available
+    # Add user preferences context
+    preferences_section = ""
+    if user_preferences:
+        pref_parts = []
+        if user_preferences.travel_style:
+            pref_parts.append(f"Travel style: {user_preferences.travel_style}")
+        if user_preferences.pace:
+            pref_parts.append(f"Preferred pace: {user_preferences.pace}")
+        if user_preferences.budget_level:
+            pref_parts.append(f"Budget: {user_preferences.budget_level}")
+        if user_preferences.group_type:
+            pref_parts.append(f"Group: {user_preferences.group_type}")
+        if user_preferences.dietary_restrictions:
+            pref_parts.append(f"Dietary restrictions: {', '.join(user_preferences.dietary_restrictions)}")
+        if user_preferences.accessibility_needs:
+            pref_parts.append(f"Accessibility needs: {', '.join(user_preferences.accessibility_needs)}")
+        if user_preferences.interests:
+            pref_parts.append(f"Interests: {', '.join(user_preferences.interests)}")
+        if user_preferences.dislikes:
+            pref_parts.append(f"Dislikes/avoid: {', '.join(user_preferences.dislikes)}")
+        if user_preferences.fitness_level:
+            pref_parts.append(f"Fitness level: {user_preferences.fitness_level}")
+        if user_preferences.photography_skill:
+            pref_parts.append(f"Photography skill: {user_preferences.photography_skill}")
+
+        if pref_parts:
+            preferences_section = "\n\nUSER PREFERENCES (tailor your suggestions to these):\n" + "\n".join(pref_parts)
+
+    # Add trip context
     context_section = ""
     if trip_context:
         context_parts = []
@@ -65,14 +110,29 @@ Only add trip_updates on a clear YES from the user."""
         if trip_context.travelers:
             context_parts.append(f"Travelers: {trip_context.travelers}")
         if trip_context.interests:
-            context_parts.append(f"Interests: {', '.join(trip_context.interests)}")
+            context_parts.append(f"Trip interests: {', '.join(trip_context.interests)}")
         if trip_context.existing_stops:
-            context_parts.append(f"Current itinerary stops: {', '.join(trip_context.existing_stops)}")
+            context_parts.append(f"Already planned stops: {', '.join(trip_context.existing_stops)}")
 
         if context_parts:
-            context_section = f"\n\nCURRENT TRIP CONTEXT:\n" + "\n".join(context_parts)
+            context_section = "\n\nCURRENT TRIP CONTEXT:\n" + "\n".join(context_parts)
 
-    return base_prompt + format_instructions + context_section
+    # Add current plan details
+    plan_section = ""
+    if current_plan:
+        plan_lines = []
+        for stop in current_plan:
+            line = f"- Day {stop.day or '?'}: {stop.name}"
+            if stop.time:
+                line += f" at {stop.time}"
+            if stop.category:
+                line += f" ({stop.category})"
+            plan_lines.append(line)
+        if plan_lines:
+            plan_section = "\n\nCURRENT TRIP PLAN (what's already scheduled):\n" + "\n".join(plan_lines)
+            plan_section += "\n\nBe aware of this plan. Don't suggest things that conflict with existing timing. Build ON this plan, suggest additions or improvements."
+
+    return base_prompt + format_instructions + preferences_section + context_section + plan_section
 
 
 def _build_messages(
@@ -84,40 +144,51 @@ def _build_messages(
     messages = [{"role": "system", "content": system_prompt}]
 
     for msg in conversation_history:
-        messages.append({
-            "role": msg.role.value,
-            "content": msg.content,
-        })
+        role = msg.role.value
+        content = msg.content
+        # Tag assistant messages with persona name for context
+        if msg.persona and role == "assistant":
+            config = PERSONA_CONFIGS.get(msg.persona.value)
+            if config:
+                content = f"[{config.display_name}]: {content}"
+        messages.append({"role": role, "content": content})
 
     messages.append({"role": "user", "content": current_message})
 
     return messages
 
 
-def _parse_response(raw_text: str, persona: ChatPersona) -> ChatResponse:
-    """Parse the assistant reply, extracting suggestions, trip updates, and stops."""
-    reply = raw_text
-    suggestions: list[str] = []
-    trip_updates: list[TripUpdate] = []
-    suggested_stops: list[dict] = []
+def _extract_place_names_from_locations(locations_raw: list[dict]) -> list[str]:
+    """Extract place names from parsed location blocks."""
+    return [loc.get("name", "") for loc in locations_raw if loc.get("name")]
 
-    # Extract stops block
-    if "```stops" in raw_text:
+
+def _parse_response(raw_text: str, persona: ChatPersona) -> tuple[str, list[dict], list[TripUpdate]]:
+    """Parse the assistant reply, extracting location blocks and trip updates.
+
+    Returns (reply_text, locations_raw, trip_updates).
+    """
+    reply = raw_text
+    locations_raw: list[dict] = []
+    trip_updates: list[TripUpdate] = []
+
+    # Extract locations block
+    if "```locations" in raw_text:
+        parts = raw_text.split("```locations")
+        reply = parts[0].strip()
+        try:
+            json_block = parts[1].split("```")[0].strip()
+            locations_raw = json.loads(json_block)
+        except (json.JSONDecodeError, IndexError):
+            pass
+
+    # Legacy: extract stops block (backward compat)
+    elif "```stops" in raw_text:
         parts = raw_text.split("```stops")
         reply = parts[0].strip()
         try:
             json_block = parts[1].split("```")[0].strip()
-            suggested_stops = json.loads(json_block)
-        except (json.JSONDecodeError, IndexError):
-            pass
-
-    # Extract suggestions block
-    if "```suggestions" in reply:
-        parts = reply.split("```suggestions")
-        reply = parts[0].strip()
-        try:
-            json_block = parts[1].split("```")[0].strip()
-            suggestions = json.loads(json_block)
+            locations_raw = json.loads(json_block)
         except (json.JSONDecodeError, IndexError):
             pass
 
@@ -132,20 +203,82 @@ def _parse_response(raw_text: str, persona: ChatPersona) -> ChatResponse:
         except (json.JSONDecodeError, IndexError):
             pass
 
-    return ChatResponse(
-        reply=reply,
-        persona=persona,
-        suggestions=suggestions,
-        trip_updates=trip_updates,
-        suggested_stops=suggested_stops,
+    # Also clean any remaining suggestions block from legacy format
+    if "```suggestions" in reply:
+        parts = reply.split("```suggestions")
+        reply = parts[0].strip()
+
+    return reply, locations_raw, trip_updates
+
+
+async def _enrich_and_build_location_cards(
+    persona: ChatPersona,
+    locations_raw: list[dict],
+    destination: str | None,
+) -> list[LocationCard]:
+    """Take raw location data from the LLM response and enrich it via persona data sources.
+
+    Returns structured LocationCard objects for the UI.
+    """
+    if not locations_raw:
+        return []
+
+    place_names = _extract_place_names_from_locations(locations_raw)
+
+    # Search persona-specific sources for enrichment
+    enriched_data = await enrich_location_cards(
+        persona_id=persona.value,
+        place_names=place_names,
+        destination=destination,
     )
+
+    # Merge LLM-provided data with search-enriched data
+    cards: list[LocationCard] = []
+    for i, loc_raw in enumerate(locations_raw):
+        # Start with what the LLM provided
+        card_data = {
+            "name": loc_raw.get("name", "Unknown"),
+            "description": loc_raw.get("description"),
+            "category": loc_raw.get("category"),
+            "day": loc_raw.get("day"),
+            "time": loc_raw.get("time"),
+            "duration_minutes": loc_raw.get("duration_minutes"),
+            "highlights": loc_raw.get("highlights", []),
+        }
+
+        # Overlay enriched data from persona sources (if available)
+        if i < len(enriched_data):
+            enriched = enriched_data[i]
+            # Use enriched coordinates if available
+            if enriched.get("latitude"):
+                card_data["latitude"] = enriched["latitude"]
+            if enriched.get("longitude"):
+                card_data["longitude"] = enriched["longitude"]
+            # Use enriched fields only if LLM didn't provide them
+            if not card_data["description"] and enriched.get("description"):
+                card_data["description"] = enriched["description"]
+            if enriched.get("rating"):
+                card_data["rating"] = enriched["rating"]
+            if enriched.get("price_level"):
+                card_data["price_level"] = enriched["price_level"]
+            if enriched.get("source_url"):
+                card_data["source_url"] = enriched["source_url"]
+            if enriched.get("address"):
+                card_data["address"] = enriched["address"]
+            if not card_data["highlights"] and enriched.get("highlights"):
+                card_data["highlights"] = enriched["highlights"]
+            if enriched.get("image_url"):
+                card_data["image_url"] = enriched["image_url"]
+
+        cards.append(LocationCard(**card_data))
+
+    return cards
 
 
 async def chat_with_persona(request: ChatRequest) -> ChatResponse:
     """Send a message to a persona expert and get trip planning advice.
 
-    The conversation is stateless on the server — the client sends
-    the full conversation history each time.
+    Stateless endpoint — client sends full conversation history each time.
     """
     client = get_openai_client()
 
@@ -167,38 +300,108 @@ async def chat_with_persona(request: ChatRequest) -> ChatResponse:
                         output_text += content_block.text
 
         if not output_text:
-            output_text = "I'm sorry, I didn't generate a response. Could you try rephrasing?"
+            output_text = "Hmm, my brain glitched for a sec 🫠 Can you say that again?"
 
-        result = _parse_response(output_text, request.persona)
+        reply, locations_raw, trip_updates = _parse_response(output_text, request.persona)
+
+        # Enrich locations with persona-specific data sources
+        destination = request.trip_context.destination if request.trip_context else None
+        suggested_stops = await _enrich_and_build_location_cards(
+            request.persona, locations_raw, destination
+        )
 
         logger.info(
             "Chat response generated",
             extra={
                 "persona": request.persona.value,
-                "suggestions_count": len(result.suggestions),
-                "updates_count": len(result.trip_updates),
+                "locations_count": len(suggested_stops),
+                "updates_count": len(trip_updates),
             },
         )
 
-        return result
+        return ChatResponse(
+            reply=reply,
+            persona=request.persona,
+            trip_updates=trip_updates,
+            suggested_stops=suggested_stops,
+        )
 
     except Exception as e:
         logger.error("Chat service failed", extra={"error": str(e), "persona": request.persona.value})
         raise
 
 
-async def chat_with_multiple_personas(request: "MultiChatRequest") -> "MultiChatResponse":
-    """Generate a group conversation where multiple personas talk to the user AND each other.
+async def chat_single_persona(
+    message: str,
+    persona: ChatPersona,
+    conversation_history: list[ChatMessage],
+    trip_context: TripContext | None = None,
+    current_plan: list[PlanStop] | None = None,
+    user_preferences: UserPreferences | None = None,
+) -> tuple[str, list[LocationCard], list[TripUpdate]]:
+    """Core single-persona chat function used by session-based endpoints.
 
-    This is NOT independent answers consolidated — it's a live group chat
-    where personas react to each other, argue, agree, build on ideas, and
-    talk directly to the user as a team.
+    Returns (reply_text, location_cards, trip_updates).
     """
-    from app.chat.models import MultiChatRequest, MultiChatResponse, PersonaReply
-
     client = get_openai_client()
 
-    # Build the group conversation system prompt
+    system_prompt = _build_system_prompt(
+        persona, trip_context, current_plan, user_preferences
+    )
+    messages = _build_messages(system_prompt, conversation_history, message)
+
+    try:
+        response = await client.responses.create(
+            model="gpt-4o",
+            input=messages,
+        )
+
+        output_text = ""
+        for item in response.output:
+            if hasattr(item, "content"):
+                for content_block in item.content:
+                    if hasattr(content_block, "text"):
+                        output_text += content_block.text
+
+        if not output_text:
+            config = PERSONA_CONFIGS.get(persona.value)
+            emoji = config.emoji if config else "🤔"
+            output_text = f"Oops, lost my train of thought {emoji} What were we talking about?"
+
+        reply, locations_raw, trip_updates = _parse_response(output_text, persona)
+
+        # Enrich locations via persona-specific data sources
+        destination = trip_context.destination if trip_context else None
+        location_cards = await _enrich_and_build_location_cards(
+            persona, locations_raw, destination
+        )
+
+        logger.info(
+            "Single persona chat completed",
+            extra={
+                "persona": persona.value,
+                "locations_count": len(location_cards),
+                "updates_count": len(trip_updates),
+            },
+        )
+
+        return reply, location_cards, trip_updates
+
+    except Exception as e:
+        logger.error(
+            "Single persona chat failed",
+            extra={"error": str(e), "persona": persona.value},
+        )
+        raise
+
+
+async def chat_with_multiple_personas(request: MultiChatRequest) -> MultiChatResponse:
+    """Generate a group conversation where multiple personas talk to the user AND each other.
+
+    Kept for backward compatibility with the /v1/chat/multi endpoint.
+    """
+    client = get_openai_client()
+
     persona_names = [p.value for p in request.personas]
     group_prompt = _build_group_conversation_prompt(persona_names, request.trip_context)
     messages = _build_messages(group_prompt, request.conversation_history, request.message)
@@ -217,9 +420,9 @@ async def chat_with_multiple_personas(request: "MultiChatRequest") -> "MultiChat
                         output_text += content_block.text
 
         if not output_text:
-            output_text = "The crew is speechless for once. Try asking again?"
+            output_text = "The crew is speechless for once 😅 Try asking again?"
 
-        # Parse the group conversation into individual persona replies
+        # Parse the group conversation
         persona_replies, all_suggestions, all_trip_updates, suggested_stops = _parse_group_conversation(
             output_text, request.personas
         )
@@ -247,22 +450,18 @@ async def chat_with_multiple_personas(request: "MultiChatRequest") -> "MultiChat
         raise
 
 
-def _build_group_conversation_prompt(personas: list[str], trip_context: "TripContext | None") -> str:
+def _build_group_conversation_prompt(personas: list[str], trip_context: TripContext | None) -> str:
     """Build a system prompt for a group conversation between personas."""
-    from app.chat.personas import PERSONA_PROMPTS
 
-    persona_descriptions = {
-        "planner": "PLANNER — practical logistics expert, keeps everyone on track",
-        "photographer": "PHOTOGRAPHER — obsessed with light and the perfect shot, dramatic about visuals",
-        "historian": "HISTORIAN — drops facts like gossip, dramatic storyteller, 'well ACTUALLY...'",
-        "geologist": "GEOLOGIST — giddy about rocks, British-nerdy energy, sees millions of years everywhere",
-        "foodie": "FOODIE — infectious food enthusiasm, interrupts everyone to talk about eating",
-        "storyteller": "STORYTELLER — dramatic narrator, loves legends and mysteries, builds suspense",
-    }
+    persona_descriptions = []
+    for p in personas:
+        config = PERSONA_CONFIGS.get(p)
+        if config:
+            persona_descriptions.append(f"- {config.emoji} {config.display_name.upper()} — {config.system_prompt[:100]}...")
+        else:
+            persona_descriptions.append(f"- {p.upper()}")
 
-    active_personas = "\n".join(
-        f"- {persona_descriptions.get(p, p.upper())}" for p in personas
-    )
+    active_personas = "\n".join(persona_descriptions)
 
     # Context section
     context_section = ""
@@ -284,94 +483,60 @@ def _build_group_conversation_prompt(personas: list[str], trip_context: "TripCon
             context_section = "\n\nTRIP CONTEXT:\n" + "\n".join(context_parts)
 
     return f"""\
-You are generating a SHORT, natural group chat between travel expert personas \
-helping a user plan their trip.
+You are generating a natural group chat between travel expert personas helping a user plan their trip.
+Each persona has their own unique voice, emoji style, and expertise. Make them feel REAL.
 
 ACTIVE PERSONAS:
 {active_personas}
 
-CRITICAL RULES — READ CAREFULLY:
+RULES:
+1. Each persona speaks in their unique voice with their signature emojis
+2. They react to each other — agree, disagree, build on ideas, tease each other
+3. Keep it natural and conversational, like a group chat between friends
+4. End with a question to the user
+5. When suggesting places, include a locations block at the end
 
-1. OUTPUT EXACTLY 2 MESSAGES TOTAL. Not 3, not 5, not 10. Just 2 lines of dialogue.
-2. One persona speaks, then another reacts or adds to it. That's it.
-3. The LAST message MUST end with a question to the user.
-4. Keep each message SHORT — 1-3 sentences max. Like a real text conversation.
-5. DO NOT dump information. Reveal ONE thing at a time.
-6. DO NOT list multiple suggestions. Offer ONE idea and ask if they're interested.
-7. Make it feel like friends texting, not experts presenting.
-
-INTERACTION STYLE:
-- Persona 1 says something specific (one idea, one reaction, one question)
-- Persona 2 reacts to it OR adds a quick thought, then asks the user something
-- That's the whole response. Stop there. Wait for the user.
-
-GOOD EXAMPLE:
-[photographer] Okay so if you're doing Olympic in August — Hurricane Ridge at sunrise. The light is unreal. Are you a morning person though?
-[foodie] If you ARE dragging yourself up at 5am, there's a coffee spot in Port Angeles that makes it worth it. Want me to tell you about it or should we figure out your first day vibe first?
-
-BAD EXAMPLE (too much):
-[photographer] Here's what I'd do for day 1... *proceeds to list 8 things*
-[historian] And here's my take... *another 8 things*
-[foodie] Don't forget... *more stuff*
-
-NEVER DO:
-- More than 2 persona messages per response
-- Long paragraphs
-- Lists of suggestions
-- Planning the whole trip at once
-- Answering without asking something back
-
-FORMAT:
-[persona_name] Short message here.
-[persona_name] Short reaction + question to user.
-
-That's it. Two lines. Always end asking the user something.
-
-WHENEVER YOU MENTION A SPECIFIC PLACE, you MUST include a stops block at the end:
-
-```stops
-[{{"name": "Hurricane Ridge", "day": 1, "time": "06:00", "duration_minutes": 180, "category": "hiking", "description": "Alpine meadows with 360-degree mountain views", "latitude": 47.9692, "longitude": -123.4988, "highlights": ["Sunrise views", "Wildflower meadows"]}}]
+LOCATION FORMAT (include at end if places are mentioned):
+```locations
+[{{"name": "Place Name", "description": "...", "category": "...", "highlights": ["...", "..."]}}]
 ```
-
-ALWAYS include this block if you suggest a specific named location. Include real coordinates.
-If you're just chatting without suggesting a specific place, skip the stops block.{context_section}"""
+{context_section}"""
 
 
 def _parse_group_conversation(
-    raw_text: str, personas: list["ChatPersona"]
-) -> tuple[list, list[str], list["TripUpdate"], list[dict]]:
-    """Parse the group conversation text into persona replies and extracted data."""
-    from app.chat.models import PersonaReply
+    output_text: str,
+    personas: list[ChatPersona],
+) -> tuple[list[PersonaReply], list[str], list[TripUpdate], list[dict]]:
+    """Parse group conversation output into structured components."""
 
-    suggestions: list[str] = []
+    # Extract locations block first
+    locations_raw: list[dict] = []
+    text = output_text
+
+    if "```locations" in text:
+        parts = text.split("```locations")
+        text = parts[0].strip()
+        try:
+            json_block = parts[1].split("```")[0].strip()
+            locations_raw = json.loads(json_block)
+        except (json.JSONDecodeError, IndexError):
+            pass
+
+    # Legacy stops block
+    if "```stops" in text:
+        parts = text.split("```stops")
+        text = parts[0].strip()
+        try:
+            json_block = parts[1].split("```")[0].strip()
+            locations_raw = json.loads(json_block)
+        except (json.JSONDecodeError, IndexError):
+            pass
+
+    # Extract trip_updates
     trip_updates: list[TripUpdate] = []
-    suggested_stops: list[dict] = []
-    conversation_text = raw_text
-
-    # Extract stops block
-    if "```stops" in raw_text:
-        parts = raw_text.split("```stops")
-        conversation_text = parts[0].strip()
-        try:
-            json_block = parts[1].split("```")[0].strip()
-            suggested_stops = json.loads(json_block)
-        except (json.JSONDecodeError, IndexError):
-            pass
-
-    # Extract suggestions block
-    if "```suggestions" in conversation_text:
-        parts = conversation_text.split("```suggestions")
-        conversation_text = parts[0].strip()
-        try:
-            json_block = parts[1].split("```")[0].strip()
-            suggestions = json.loads(json_block)
-        except (json.JSONDecodeError, IndexError):
-            pass
-
-    # Extract trip_updates block
-    if "```trip_updates" in conversation_text:
-        parts = conversation_text.split("```trip_updates")
-        conversation_text = parts[0].strip()
+    if "```trip_updates" in text:
+        parts = text.split("```trip_updates")
+        text = parts[0].strip()
         try:
             json_block = parts[1].split("```")[0].strip()
             updates_raw = json.loads(json_block)
@@ -379,34 +544,18 @@ def _parse_group_conversation(
         except (json.JSONDecodeError, IndexError):
             pass
 
-    # Extract each persona's lines from the conversation
-    persona_replies = []
+    # Parse individual persona replies from tagged format [persona_name]
+    persona_replies: list[PersonaReply] = []
     for persona in personas:
-        # Collect all lines that belong to this persona
-        tag = f"[{persona.value}]"
-        lines = []
-        for line in conversation_text.split("\n"):
-            stripped = line.strip()
-            if stripped.lower().startswith(tag):
-                content = stripped[len(tag):].strip()
-                if content:
-                    lines.append(content)
-
-        reply_text = " ".join(lines) if lines else ""
+        config = PERSONA_CONFIGS.get(persona.value)
+        display = config.display_name if config else persona.value
+        # Look for messages tagged with this persona
+        pattern = rf'\[{re.escape(display)}\][:\s]*(.*?)(?=\[|$)'
+        matches = re.findall(pattern, text, re.DOTALL)
+        reply_text = " ".join(m.strip() for m in matches) if matches else ""
         persona_replies.append(PersonaReply(
             persona=persona,
-            reply=reply_text,
-            suggestions=[],
-            trip_updates=[],
+            reply=reply_text or text[:200],  # Fallback to first part of text
         ))
 
-    return persona_replies, suggestions, trip_updates, suggested_stops
-
-
-async def _consolidate_replies(
-    user_message: str,
-    persona_replies: list,
-    trip_context: "TripContext | None",
-) -> str:
-    """Fallback consolidation — not used in group conversation mode."""
-    return "See the group conversation above."
+    return persona_replies, [], trip_updates, locations_raw

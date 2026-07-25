@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -24,8 +25,36 @@ class ChatRole(StrEnum):
     ASSISTANT = "assistant"
 
 
+class UserPreferences(BaseModel):
+    """User preferences that shape how personas respond."""
+
+    travel_style: str | None = None  # e.g. "adventurous", "relaxed", "luxury", "budget"
+    pace: str | None = None  # e.g. "packed", "moderate", "slow"
+    dietary_restrictions: list[str] = Field(default_factory=list)
+    accessibility_needs: list[str] = Field(default_factory=list)
+    interests: list[str] = Field(default_factory=list)
+    dislikes: list[str] = Field(default_factory=list)
+    budget_level: str | None = None  # e.g. "budget", "mid-range", "luxury"
+    group_type: str | None = None  # e.g. "solo", "couple", "family", "friends"
+    fitness_level: str | None = None  # e.g. "low", "moderate", "high"
+    photography_skill: str | None = None  # e.g. "phone only", "hobbyist", "pro"
+
+
+class PlanStop(BaseModel):
+    """A stop in the user's current trip plan."""
+
+    name: str
+    day: int | None = None
+    time: str | None = None  # HH:mm
+    duration_minutes: int | None = None
+    category: str | None = None
+    notes: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+
+
 class TripContext(BaseModel):
-    """Optional trip context to ground the conversation."""
+    """Trip context to ground the conversation."""
 
     trip_id: str | None = None
     destination: str | None = None
@@ -35,6 +64,25 @@ class TripContext(BaseModel):
     travelers: int | None = None
     interests: list[str] = Field(default_factory=list)
     existing_stops: list[str] = Field(default_factory=list)
+
+
+class LocationCard(BaseModel):
+    """Structured location data for the UI to render as a card."""
+
+    name: str
+    description: str | None = None
+    category: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    day: int | None = None
+    time: str | None = None
+    duration_minutes: int | None = None
+    highlights: list[str] = Field(default_factory=list)
+    image_url: str | None = None
+    rating: float | None = None
+    price_level: str | None = None  # "$", "$$", "$$$", "$$$$"
+    source_url: str | None = None
+    address: str | None = None
 
 
 class TripUpdate(BaseModel):
@@ -69,7 +117,7 @@ class ChatResponse(BaseModel):
     persona: ChatPersona
     suggestions: list[str] = Field(default_factory=list)
     trip_updates: list[TripUpdate] = Field(default_factory=list)
-    suggested_stops: list[dict] = Field(default_factory=list)
+    suggested_stops: list[LocationCard] = Field(default_factory=list)
 
 
 # --- Multi-persona models ---
@@ -111,6 +159,8 @@ class CreateSessionRequest(BaseModel):
 
     personas: list[ChatPersona] = Field(min_length=1, max_length=6)
     trip_context: TripContext | None = None
+    current_plan: list[PlanStop] = Field(default_factory=list)
+    user_preferences: UserPreferences | None = None
 
 
 class CreateSessionResponse(BaseModel):
@@ -119,6 +169,8 @@ class CreateSessionResponse(BaseModel):
     session_id: str
     personas: list[ChatPersona]
     trip_context: TripContext | None = None
+    current_plan: list[PlanStop] = Field(default_factory=list)
+    user_preferences: UserPreferences | None = None
 
 
 class SessionMessageRequest(BaseModel):
@@ -128,14 +180,13 @@ class SessionMessageRequest(BaseModel):
 
 
 class SessionMessageResponse(BaseModel):
-    """Response from a session message."""
+    """Response from a session message — single persona reply."""
 
     session_id: str
-    consolidated: str
-    persona_replies: list[PersonaReply] = Field(default_factory=list)
-    all_suggestions: list[str] = Field(default_factory=list)
-    all_trip_updates: list[TripUpdate] = Field(default_factory=list)
-    suggested_stops: list[dict] = Field(default_factory=list)
+    persona: ChatPersona
+    reply: str
+    suggested_stops: list[LocationCard] = Field(default_factory=list)
+    trip_updates: list[TripUpdate] = Field(default_factory=list)
 
 
 class AcceptSuggestionRequest(BaseModel):
@@ -154,5 +205,7 @@ class SessionInfoResponse(BaseModel):
     session_id: str
     personas: list[str]
     trip_context: TripContext | None = None
+    current_plan: list[PlanStop] = Field(default_factory=list)
+    user_preferences: UserPreferences | None = None
     message_count: int
     accepted_stops: list[dict] = Field(default_factory=list)
