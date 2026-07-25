@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.routes import internal_router, router
+from app.chat.routes import chat_router
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 
@@ -79,6 +80,7 @@ def create_app() -> FastAPI:
 
     # Include routers
     app.include_router(router)
+    app.include_router(chat_router)
     app.include_router(internal_router)
 
     # Global exception handler
