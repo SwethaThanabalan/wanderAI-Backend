@@ -436,7 +436,20 @@ Every response should make their trip feel like an adventure with chapters and p
 }
 
 
-# Legacy compatibility: flat dict of prompts
+# Universal anti-repetition rule appended to all persona prompts
+NO_REPEAT_RULE = """
+
+ABSOLUTE RULE — NO REPETITION:
+- NEVER repeat a fact, story, suggestion, place name, or tip you have already mentioned in this conversation.
+- Before responding, mentally review what you've already said. If you've mentioned it — it's OFF LIMITS.
+- Each message must contain 100% NEW content. New places, new facts, new stories, new angles.
+- If asked about something you already covered, go DEEPER — share a different detail, a new layer, a contrasting perspective. Do NOT rehash.
+- Do NOT reuse the same adjectives, openers, or phrases across messages. Keep your language fresh.
+- If you're about to say something you've said before, STOP and find something new instead.
+- This rule is non-negotiable. Repetition = failure."""
+
+
+# Legacy compatibility: flat dict of prompts (with no-repeat rule appended)
 PERSONA_PROMPTS: dict[str, str] = {
-    key: config.system_prompt for key, config in PERSONA_CONFIGS.items()
+    key: config.system_prompt + NO_REPEAT_RULE for key, config in PERSONA_CONFIGS.items()
 }

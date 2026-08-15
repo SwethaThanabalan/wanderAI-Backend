@@ -32,7 +32,7 @@ from app.chat.models import (
     TripUpdate,
     UserPreferences,
 )
-from app.chat.personas import PERSONA_CONFIGS, PERSONA_PROMPTS
+from app.chat.personas import PERSONA_CONFIGS, PERSONA_PROMPTS, NO_REPEAT_RULE
 from app.core.logging import get_logger
 from app.services.openai_service import get_openai_client
 
@@ -122,7 +122,7 @@ def _build_system_prompt(
     """Build the full system prompt with grounding rules, persona, trip context, and preferences."""
     config = PERSONA_CONFIGS.get(persona.value)
     if config:
-        base_prompt = config.system_prompt
+        base_prompt = config.system_prompt + NO_REPEAT_RULE
     else:
         base_prompt = PERSONA_PROMPTS.get(persona.value, PERSONA_PROMPTS["planner"])
 
@@ -175,6 +175,13 @@ GROUNDING RULES:
 
     # Add response format instructions for structured data extraction
     format_instructions = """
+
+CRITICAL — NO REPETITION RULE:
+- NEVER repeat information you have already said in this conversation.
+- Check your previous messages before responding. If you already mentioned a place, fact, tip, or suggestion — do NOT say it again.
+- Each response must contain NEW information, a NEW perspective, or a NEW suggestion.
+- If the user asks about something you've already covered, go DEEPER with new details, a different angle, or a follow-up insight — do not rehash what you said before.
+- Avoid generic filler phrases you've already used. Keep it fresh every time.
 
 LOCATION SUGGESTIONS:
 Whenever you mention or suggest a SPECIFIC named place (restaurant, viewpoint, trail, museum, etc.),
