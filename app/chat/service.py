@@ -32,7 +32,7 @@ from app.chat.models import (
     TripUpdate,
     UserPreferences,
 )
-from app.chat.personas import PERSONA_CONFIGS, PERSONA_PROMPTS, NO_REPEAT_RULE
+from app.chat.personas import PERSONA_CONFIGS, PERSONA_PROMPTS
 from app.core.logging import get_logger
 from app.services.openai_service import get_openai_client
 
@@ -122,7 +122,7 @@ def _build_system_prompt(
     """Build the full system prompt with grounding rules, persona, trip context, and preferences."""
     config = PERSONA_CONFIGS.get(persona.value)
     if config:
-        base_prompt = config.system_prompt + NO_REPEAT_RULE
+        base_prompt = config.system_prompt
     else:
         base_prompt = PERSONA_PROMPTS.get(persona.value, PERSONA_PROMPTS["planner"])
 
@@ -501,7 +501,7 @@ async def chat_single_persona(
             if p != persona:
                 config = PERSONA_CONFIGS.get(p.value)
                 if config:
-                    other_personas.append(f"{config.emoji} {config.display_name}")
+                    other_personas.append(f"{config.display_name}")
         if other_personas:
             system_prompt += f"\n\nGROUP CHAT CONTEXT:\nYou're in a group chat with: {', '.join(other_personas)} and the user."
             system_prompt += "\nYou take turns responding. React to what others said — agree, disagree, riff on their ideas, tease them, or add your perspective. This is a conversation, not isolated answers."
@@ -533,8 +533,7 @@ async def chat_single_persona(
 
         if not output_text:
             config = PERSONA_CONFIGS.get(persona.value)
-            emoji = config.emoji if config else "🤔"
-            output_text = f"Oops, lost my train of thought {emoji} What were we talking about?"
+            output_text = "Oops, lost my train of thought. What were we talking about?"
 
         reply, locations_raw, trip_updates = _parse_response(output_text, persona)
 
@@ -625,7 +624,7 @@ def _build_group_conversation_prompt(personas: list[str], trip_context: TripCont
     for p in personas:
         config = PERSONA_CONFIGS.get(p)
         if config:
-            persona_descriptions.append(f"- {config.emoji} {config.display_name.upper()} — {config.system_prompt[:100]}...")
+            persona_descriptions.append(f"- {config.display_name.upper()} — {config.system_prompt[:100]}...")
         else:
             persona_descriptions.append(f"- {p.upper()}")
 

@@ -118,7 +118,6 @@ async def list_personas():
         personas_list.append({
             "id": key,
             "name": config.display_name,
-            "emoji": config.emoji,
             "description": config.system_prompt.split("\n\n")[1] if "\n\n" in config.system_prompt else config.system_prompt[:150],
             "data_sources": config.data_sources,
             "icon": _persona_icon(key),
