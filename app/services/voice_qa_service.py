@@ -53,7 +53,7 @@ async def transcribe_audio(audio_bytes: bytes, filename: str = "question.m4a") -
 
         logger.info(
             "Audio transcribed",
-            extra={"filename": filename, "text_length": len(text)},
+            extra={"audio_filename": filename, "text_length": len(text)},
         )
 
         return text
