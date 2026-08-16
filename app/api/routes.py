@@ -228,6 +228,124 @@ async def get_episode_metadata(job_id: UUID):
     return FileResponse(path, media_type="application/json", filename="metadata.json")
 
 
+# --- Voice Q&A ---
+
+
+@router.post("/v1/voice-qa")
+async def voice_question_answer(
+    request: Request,
+    request_id: str = Depends(get_request_id),
+):
+    """Voice-to-voice Q&A: send an audio question, get an audio answer.
+
+    Accepts audio as the raw request body (Content-Type: audio/*).
+    Transcribes the question, generates a contextual answer, converts to speech.
+
+    Query parameters (all optional):
+    - persona: which persona voice to use (photographer, historian, etc.)
+    - destination: active destination for grounding
+    - trip_name: current trip name
+    - current_stop: current stop name for local context
+    - script_context: base64-encoded recent narration text (for follow-up questions)
+
+    Returns:
+    - Content-Type: audio/mpeg (raw MP3 bytes)
+    - X-Transcription: the transcribed question text
+    - X-Answer-Text: the generated answer text
+
+    The client can play the response body directly as MP3 audio.
+    """
+    from base64 import b64decode
+
+    from fastapi.responses import Response
+
+    from app.services.voice_qa_service import voice_question_to_voice_answer
+
+    # Read raw audio bytes from request body
+    audio_bytes = await request.body()
+    if not audio_bytes or len(audio_bytes) < 100:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Request body must contain audio data (m4a, mp3, wav, etc.)",
+        )
+
+    # Extract optional context from query params
+    params = request.query_params
+    persona_id = params.get("persona")
+    destination = params.get("destination")
+
+    trip_context = {}
+    if destination:
+        trip_context["destination"] = destination
+    if params.get("trip_name"):
+        trip_context["trip_name"] = params.get("trip_name")
+    if params.get("state"):
+        trip_context["state"] = params.get("state")
+    if params.get("current_stop"):
+        trip_context["current_stop_name"] = params.get("current_stop")
+
+    # Decode script context if provided (base64)
+    script_context = None
+    if params.get("script_context"):
+        try:
+            script_context = b64decode(params.get("script_context")).decode("utf-8")
+        except Exception:
+            pass  # Ignore malformed base64
+
+    # Determine audio filename from content-type for proper transcription
+    content_type = request.headers.get("content-type", "audio/m4a")
+    ext_map = {
+        "audio/m4a": "question.m4a",
+        "audio/mp4": "question.mp4",
+        "audio/mpeg": "question.mp3",
+        "audio/mp3": "question.mp3",
+        "audio/wav": "question.wav",
+        "audio/x-wav": "question.wav",
+        "audio/webm": "question.webm",
+        "audio/ogg": "question.ogg",
+        "audio/flac": "question.flac",
+    }
+    filename = ext_map.get(content_type, "question.m4a")
+
+    logger.info(
+        "Voice Q&A request",
+        extra={
+            "request_id": request_id,
+            "audio_bytes": len(audio_bytes),
+            "persona": persona_id,
+            "destination": destination,
+            "content_type": content_type,
+        },
+    )
+
+    try:
+        answer_audio, question_text, answer_text = await voice_question_to_voice_answer(
+            audio_bytes=audio_bytes,
+            filename=filename,
+            persona_id=persona_id,
+            destination=destination,
+            trip_context=trip_context if trip_context else None,
+            script_context=script_context,
+        )
+
+        return Response(
+            content=answer_audio,
+            media_type="audio/mpeg",
+            headers={
+                "X-Transcription": question_text[:500] if question_text else "",
+                "X-Answer-Text": answer_text[:1000] if answer_text else "",
+                "Content-Disposition": "inline; filename=\"answer.mp3\"",
+            },
+        )
+
+    except Exception as e:
+        logger.error("Voice Q&A failed", extra={"request_id": request_id, "error": str(e)})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Voice Q&A processing failed. Please try again.",
+        )
+
+
 # --- Internal Processing ---
 
 
