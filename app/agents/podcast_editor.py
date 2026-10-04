@@ -19,11 +19,11 @@ from app.services.openai_service import get_openai_client
 logger = get_logger(__name__)
 
 # Duration constants
-WORDS_PER_MINUTE = 200  # Aim high so expansion is rarely needed
-MIN_WORD_RATIO = 0.90
+WORDS_PER_MINUTE = 180  # Realistic spoken pace; avoids over-padding to hit targets
+MIN_WORD_RATIO = 0.80   # Allow a tighter script rather than forcing repetitive padding
 MIN_CHAPTERS_8_MIN = 5
 MIN_SEGMENTS_8_MIN = 16
-MAX_EXPANSION_RETRIES = 2
+MAX_EXPANSION_RETRIES = 1  # Expand at most once; repeated expansion causes repetition
 
 # The dialogue_type values must exactly match the DialogueType enum
 _ALLOWED_DIALOGUE_TYPES = "observation, fact, story, question, response, transition, intro, outro, advice"
@@ -108,32 +108,41 @@ GROUP DYNAMICS:
 - The Historian and Storyteller compete over who has the better facts
 - They ALL react to each other: "No way!", "Stop.", "You're making that up!", "OKAY but—"
 
-HIGH ENERGY RULES:
-- Every persona should sound genuinely EXCITED to be talking
-- Rapid-fire dialogue with frequent reactions and interruptions
-- At least 3-4 genuine laugh moments per episode
-- Include moments of shared awe where everyone gets quiet
-- Build to a funny argument, then resolve with warmth
-- Callbacks to earlier jokes across the episode
-- Pop culture references that fit naturally
-- Self-deprecating humor from everyone
+ENERGY RULES (personality serves the content, never replaces it):
+- Every persona sounds genuinely engaged, but the FACTS lead and personality delivers them
+- Keep the energy warm and natural, not manic — this is a smart travel companion, not a game show
+- Reactions and light humor are welcome, but every exchange must advance real content
+- Moments of shared awe are good; empty hype is not
+
+CONTENT-FIRST RULES (most important):
+- EVERY segment must convey a specific, substantive fact, story, or insight from the findings
+- Banter is allowed ONLY when it carries a real detail — never filler for its own sake
+- NO pop culture tangents, NO off-topic jokes, NO rambling that isn't about this place
+- If a segment doesn't teach the listener something about THIS destination, cut it
 
 SEASONAL AWARENESS:
-- Reference the specific visit date/season throughout
-- Make seasonal observations part of the banter
-- If something is seasonal, make it feel urgent and exciting
+- Reference the specific visit date/season where it is genuinely relevant
+- Keep seasonal notes tied to real, findable details
+
+ABSOLUTE NO-REPETITION RULE:
+- NEVER state the same fact, place, name, or story twice across the entire script
+- Each finding should be covered ONCE, in its best moment — do not circle back to it
+- Do not restate a point in different words to fill space
+- Do not reuse the same adjectives, openers, or catchphrases repeatedly
+- If you have covered all findings, the episode is DONE — do not pad with repetition
 
 WHAT TO AVOID:
-- Long monologues (NEVER more than 3 sentences without someone reacting)
+- Repeating any fact, story, or idea already said
+- Off-topic content, tangents, or facts not grounded in the findings
 - Generic filler: "That's a great point", "Absolutely", "Indeed", "Interesting"
-- Formal or robotic tone
-- All personas sounding the same
-- Predictable turn-taking without surprises
+- Long monologues (NEVER more than 3 sentences without someone reacting)
+- Formal or robotic tone, or all personas sounding the same
 
 FACTUAL RULES:
 - Use ONLY the approved findings provided. Do not invent facts.
+- Each finding appears EXACTLY ONCE. Do not reuse a finding across multiple segments.
 - Map each factual segment to its source finding IDs.
-- Humor wraps around facts — the fact is the setup, personality is the delivery.
+- The fact is the substance; personality is only the delivery.
 
 STRUCTURE RULES:
 - Keep each persona's voice VERY distinct.
@@ -183,24 +192,26 @@ async def _generate_script_structured(
 - Target duration: {episode_minutes} minutes
 - Personas: {', '.join(personas)}{season_line}
 
-DURATION REQUIREMENTS (critical — DO NOT produce a short script):
-- MINIMUM word count: {targets['minimum_word_count']} words (hard floor, script will be rejected below this)
+DURATION GUIDANCE (achieve length through DEPTH, never through repetition):
 - Target word count: {targets['target_word_count']} words
 - Preferred range: {targets['target_word_count']}–{targets['preferred_upper_word_count']} words
 - Minimum chapters: {targets['min_chapters']}
 - Minimum dialogue segments: {targets['min_segments']}
-- Each dialogue turn should be 60–150 words (longer is better than shorter)
+- Each dialogue turn should be 60–150 words
 - Intro: BRIEF (40-60 words max) — just a punchy hook to start
 - Outro: BRIEF (40-60 words max) — quick callback and sign-off
-- PUT ALL THE WORDS INTO THE CONTENT CHAPTERS — rich detail, stories, arguments, reactions
-- USE ALL the approved findings — weave every single one into the conversation
-- If you have unused findings, add more segments to cover them
 
-THIS IS VERY IMPORTANT: The script MUST hit at least {targets['minimum_word_count']} words. \
-Keep intro/outro short. Spend the words on CONTENT — detailed stories, vivid descriptions, \
-funny reactions, follow-up questions, and deep dives into the findings.
+HOW TO REACH THE TARGET LENGTH (critical):
+- Use EVERY approved finding, each covered ONCE, explored in genuine DEPTH
+- Depth means: the specific detail, why it matters, what the traveler can see/do,
+  the human or historical context, and a vivid sensory description
+- Add natural follow-up questions and reactions that extend a finding with NEW angles
+- DO NOT pad by repeating facts, restating points, or adding empty banter
+- If covering every finding in depth still falls short of the target, that is ACCEPTABLE —
+  a tight, non-repetitive {targets['minimum_word_count'] // 200}-minute script beats a padded one
+- Quality and uniqueness ALWAYS win over hitting an exact word count
 
-Approved findings to use (USE ALL OF THEM):
+Approved findings — cover each exactly ONCE, in depth:
 {findings_text}"""
 
     if error_context:
@@ -235,34 +246,31 @@ async def _expand_script(
 
     script_json = json.dumps(script.model_dump(), indent=2, default=str)
 
-    expansion_prompt = f"""The current script is {missing_words} words SHORT of the minimum requirement.
+    expansion_prompt = f"""The current script is {missing_words} words short of the target.
 
 Current word count: {count_script_words(script)}
-Required minimum: {targets['minimum_word_count']}
 Target: {targets['target_word_count']}–{targets['preferred_upper_word_count']}
 
-EXPAND the script by:
-1. Adding richer explanations to existing segments
-2. Adding meaningful follow-up questions between personas
-3. Adding visual and historical context
-4. Adding practical traveler guidance
-5. Adding smooth chapter transitions
-6. Adding callbacks to earlier details
-7. Ensuring both personas contribute meaningfully in every chapter
+EXPAND ONLY by adding genuinely NEW content — never by repeating what's already there:
+1. Deepen existing segments with a NEW specific detail from a finding not yet fully explored
+2. Add follow-up questions that open a NEW angle (not a restatement)
+3. Add visual, historical, or practical context that has NOT been mentioned yet
+4. Add smooth transitions that carry a new thought
 
-Do NOT add:
-- Empty filler or repeated facts
-- Unsupported claims (use only the approved findings)
-- Artificial silence or padding
+ABSOLUTE RULES:
+- Do NOT repeat, rephrase, or restate any fact, story, or idea already in the script
+- Do NOT add empty filler, hype, or padding
+- Do NOT introduce unsupported claims — use only the approved findings
+- If every finding is already covered in depth, DO NOT expand further — return the script as-is
+- A shorter, non-repetitive script is BETTER than a padded one
 
 CURRENT SCRIPT:
 {script_json}
 
-APPROVED FINDINGS (for reference):
+APPROVED FINDINGS (for reference — do not repeat ones already covered):
 {findings_text}
 
-Output the expanded script. Minimum {targets['minimum_word_count']} words total dialogue. \
-Use ONLY these dialogue_type values: {_ALLOWED_DIALOGUE_TYPES}"""
+Output the expanded script. Use ONLY these dialogue_type values: {_ALLOWED_DIALOGUE_TYPES}"""
 
     response = await client.responses.parse(
         model="gpt-4o",

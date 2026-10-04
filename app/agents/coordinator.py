@@ -131,15 +131,33 @@ async def run_scripting_phase(
     verification: VerificationOutput,
     visit_date: str | None = None,
 ) -> PodcastScript:
-    """Run the podcast editor to generate the script."""
+    """Curate findings (dedup + relevance), then run the podcast editor."""
+    from app.agents.finding_curator import curate_findings
     from app.agents.podcast_editor import run_podcast_editor
+
+    # Curate: deduplicate overlapping claims, drop off-topic, rank by value.
+    # This is the primary defense against repetition and tangents in narration.
+    curated_findings = await curate_findings(
+        destination_name=destination_name,
+        region=region,
+        approved_findings=verification.approved_findings,
+    )
+
+    logger.info(
+        "Findings curated before scripting",
+        extra={
+            "job_id": str(job_id),
+            "approved_count": len(verification.approved_findings),
+            "curated_count": len(curated_findings),
+        },
+    )
 
     script = await run_podcast_editor(
         destination_name=destination_name,
         region=region,
         episode_minutes=episode_minutes,
         personas=personas,
-        approved_findings=verification.approved_findings,
+        approved_findings=curated_findings,
         visit_date=visit_date,
     )
 
