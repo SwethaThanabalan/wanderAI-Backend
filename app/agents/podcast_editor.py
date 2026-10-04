@@ -429,6 +429,20 @@ async def run_podcast_editor(
             )
             break
 
+    # Step 3: Final repetition audit — detect & cut any repeated content,
+    # backfilling with new findings if the cut leaves the script short.
+    from app.agents.script_deduplicator import deduplicate_script
+
+    try:
+        script = await deduplicate_script(
+            script=script,
+            approved_findings=approved_findings,
+            target_word_count=targets["target_word_count"],
+            minimum_word_count=targets["minimum_word_count"],
+        )
+    except Exception as e:
+        logger.warning("Deduplication step failed, using pre-dedup script", extra={"error": str(e)})
+
     final_word_count = count_script_words(script)
     logger.info(
         "Final script ready",

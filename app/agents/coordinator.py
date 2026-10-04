@@ -237,6 +237,31 @@ async def run_audio_phase(
                 findings_text=findings_text,
                 missing_words=missing_words,
             )
+
+            # Re-run the repetition audit after expansion — expansion can
+            # reintroduce repeated content, so dedup again to guarantee uniqueness.
+            try:
+                import json as _json
+
+                from app.agents.podcast_editor import _compute_duration_targets
+                from app.agents.script_deduplicator import deduplicate_script
+                from app.models.research import ResearchFinding
+
+                parsed_findings = [
+                    ResearchFinding(**f) for f in _json.loads(findings_text)
+                ]
+                _targets = _compute_duration_targets(episode_minutes)
+                current_script = await deduplicate_script(
+                    script=current_script,
+                    approved_findings=parsed_findings,
+                    target_word_count=_targets["target_word_count"],
+                    minimum_word_count=_targets["minimum_word_count"],
+                )
+            except Exception as dedup_err:
+                logger.warning(
+                    "Post-expansion dedup failed, keeping expanded script",
+                    extra={"error": str(dedup_err)},
+                )
         except Exception as e:
             logger.warning("Audio expansion failed", extra={"error": str(e)})
             return audio_bytes, current_script
