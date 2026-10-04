@@ -81,21 +81,23 @@ def _findings_to_text(findings: list[ResearchFinding]) -> str:
     )
 
 
-async def deduplicate_script(
+# How close to target the script must get before we stop looping.
+# If the deduped script is more than this fraction below target, we run
+# another dedup+backfill pass to fill the gap with new content.
+WITHIN_TARGET_RATIO = 0.90  # must be within 10% of target
+MAX_DEDUP_PASSES = 3
+
+
+async def _run_single_dedup_pass(
     script: PodcastScript,
     approved_findings: list[ResearchFinding],
     target_word_count: int,
     minimum_word_count: int,
-) -> PodcastScript:
-    """Audit the script for repetition, cut it, and backfill with new content.
-
-    Returns the de-duplicated script. On failure, returns the original unchanged.
-    """
-    if not script.segments:
-        return script
-
+    pass_number: int,
+) -> PodcastScript | None:
+    """Run ONE dedup + backfill pass. Returns the corrected script or None on failure."""
     client = get_openai_client()
-    original_words = _count_words(script)
+    current_words = _count_words(script)
     script_json = json.dumps(script.model_dump(), indent=2, default=str)
     findings_text = _findings_to_text(approved_findings)
 
@@ -103,13 +105,15 @@ async def deduplicate_script(
 
 TARGET word count: {target_word_count}
 MINIMUM word count: {minimum_word_count}
-Current word count: {original_words}
+Current word count: {current_words}
 
 INSTRUCTIONS:
 1. Find and remove every repeated fact, story, idea, or phrase — each must appear ONCE.
 2. If removing repetition drops you below the target, backfill with NEW segments that cover
    approved findings not yet used. Never reintroduce content you just cut.
-3. Keep intro/outro brief, preserve chapters, keep the conversation natural.
+3. The final script MUST land within 10% of the target word count ({int(target_word_count * WITHIN_TARGET_RATIO)}+ words)
+   using ONLY genuinely new, non-repetitive content.
+4. Keep intro/outro brief, preserve chapters, keep the conversation natural.
 
 CURRENT SCRIPT:
 {script_json}
@@ -131,35 +135,117 @@ Return the complete corrected script. Use ONLY these dialogue_type values: {_ALL
 
         deduped = response.output_parsed
         if deduped is None or not deduped.segments:
-            logger.warning("Deduplicator returned empty script, keeping original")
-            return script
-
-        new_words = _count_words(deduped)
+            logger.warning("Deduplicator returned empty script on pass", extra={"pass": pass_number})
+            return None
 
         logger.info(
-            "Script deduplicated",
+            "Dedup pass completed",
             extra={
-                "original_words": original_words,
-                "deduped_words": new_words,
-                "original_segments": len(script.segments),
-                "deduped_segments": len(deduped.segments),
+                "pass": pass_number,
+                "before_words": current_words,
+                "after_words": _count_words(deduped),
+                "before_segments": len(script.segments),
+                "after_segments": len(deduped.segments),
             },
         )
-
-        # Safety guard: if the deduper collapsed the script far below the minimum,
-        # the original is likely safer (dedup over-cut without backfilling).
-        if new_words < minimum_word_count * 0.6 and original_words >= minimum_word_count:
-            logger.warning(
-                "Deduplicated script far too short, keeping original",
-                extra={"deduped_words": new_words, "minimum": minimum_word_count},
-            )
-            return script
 
         return deduped
 
     except Exception as e:
         logger.warning(
-            "Script deduplication failed, keeping original script",
-            extra={"error": str(e)},
+            "Dedup pass failed",
+            extra={"pass": pass_number, "error": str(e)},
         )
+        return None
+
+
+async def deduplicate_script(
+    script: PodcastScript,
+    approved_findings: list[ResearchFinding],
+    target_word_count: int,
+    minimum_word_count: int,
+) -> PodcastScript:
+    """Audit the script for repetition, cut it, and backfill with new content.
+
+    Loops the dedup + backfill pass until the script is within 10% of the target
+    word count, or until MAX_DEDUP_PASSES is reached. If a pass cuts the content
+    by more than 10% (below target), the next pass backfills with new findings
+    and the loop runs again.
+
+    Returns the best de-duplicated script. On total failure, returns the original.
+    """
+    if not script.segments:
         return script
+
+    original = script
+    original_words = _count_words(script)
+    current = script
+    within_target_floor = int(target_word_count * WITHIN_TARGET_RATIO)
+
+    for pass_number in range(1, MAX_DEDUP_PASSES + 1):
+        result = await _run_single_dedup_pass(
+            script=current,
+            approved_findings=approved_findings,
+            target_word_count=target_word_count,
+            minimum_word_count=minimum_word_count,
+            pass_number=pass_number,
+        )
+
+        if result is None:
+            # Pass failed — stop and return the best we have so far
+            break
+
+        current = result
+        current_words = _count_words(current)
+
+        # Done if we're within 10% of target (or above it)
+        if current_words >= within_target_floor:
+            logger.info(
+                "Dedup loop converged — within 10% of target",
+                extra={
+                    "passes": pass_number,
+                    "final_words": current_words,
+                    "target": target_word_count,
+                    "floor": within_target_floor,
+                },
+            )
+            break
+
+        # Still more than 10% short — loop again to backfill with new content
+        logger.info(
+            "Script still >10% below target after dedup, backfilling again",
+            extra={
+                "pass": pass_number,
+                "current_words": current_words,
+                "floor": within_target_floor,
+                "shortfall": within_target_floor - current_words,
+            },
+        )
+    else:
+        logger.warning(
+            "Dedup loop hit max passes without reaching 10% window",
+            extra={"max_passes": MAX_DEDUP_PASSES, "final_words": _count_words(current)},
+        )
+
+    final_words = _count_words(current)
+
+    # Safety guard: if every pass collapsed the script far below the minimum,
+    # the original is safer than a broken, over-cut script.
+    if final_words < minimum_word_count * 0.6 and original_words >= minimum_word_count:
+        logger.warning(
+            "Deduplicated script far too short, keeping original",
+            extra={"deduped_words": final_words, "minimum": minimum_word_count},
+        )
+        return original
+
+    logger.info(
+        "Script deduplication complete",
+        extra={
+            "original_words": original_words,
+            "final_words": final_words,
+            "original_segments": len(original.segments),
+            "final_segments": len(current.segments),
+        },
+    )
+
+    return current
